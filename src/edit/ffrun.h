@@ -4,9 +4,12 @@
 
 namespace edit::ff {
 
-const std::wstring& Ffmpeg();   // next to fastplay.exe, else on PATH, else "ffmpeg.exe"
+// ffmpeg_path from fastplay.ini (ffprobe.exe is looked for in the same folder). Call before the first Ffmpeg().
+void SetFfmpegPath(const std::wstring& ffmpegExe);
+const std::wstring& Ffmpeg();   // ffmpeg_path, else next to fastplay.exe, else on PATH, else "ffmpeg.exe"
 const std::wstring& Ffprobe();
 bool Available();               // both tools found
+std::wstring MissingToolsMessage();  // what to do when they aren't
 
 struct Result {
     int code = -1;

@@ -32,7 +32,7 @@ double MsSinceProcessStart();
 void TimingLog(const char* what);  // appends to FASTPLAY_TIMING file when set
 bool TestMode();                   // FASTPLAY_TEST=1 or visible: muted, never activates, no settings/history writes
 bool TestOffScreen();              // FASTPLAY_TEST=1: and placed off every screen
-// Test copies are driven with mouse window messages (toolspmouse.ps1), without a real button press, so Windows
+// Test copies are driven with mouse window messages (tools\fpmouse.ps1), without a real button press, so Windows
 // takes the mouse capture straight back; drags then keep going until the WM_LBUTTONUP the test sends.
 inline bool KeepDragOnCaptureLoss() { return TestMode(); }
 // Keyboard focus to h only when its window is already the active one. SetFocus on an inactive window activates it,
@@ -47,5 +47,9 @@ std::wstring MainClassName();
 
 // True when the file's volume sits on a drive with a seek penalty (spinning disk).
 bool IsOnSpinningDisk(const std::wstring& path);
+
+// Puts files on the clipboard the way Explorer's Copy does (CF_HDROP + "copy" drop effect), so Ctrl+V attaches
+// them in Discord or pastes them in Explorer. Test mode only logs them: the user's clipboard is never touched.
+bool CopyFilesToClipboard(HWND owner, const std::vector<std::wstring>& files);
 
 }  // namespace util

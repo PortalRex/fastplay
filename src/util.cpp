@@ -1,5 +1,6 @@
 #include "util.h"
 #include <winioctl.h>
+#include <shlobj.h>  // DROPFILES, CFSTR_PREFERREDDROPEFFECT (no shell32 calls)
 #include <cstdio>
 #include <cwctype>
 
@@ -182,6 +183,51 @@ bool IsOnSpinningDisk(const std::wstring& path) {
     BOOL ok = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, &q, sizeof q, &d, sizeof d, &got, nullptr);
     CloseHandle(h);
     return ok && got >= sizeof d && d.IncursSeekPenalty;
+}
+
+bool CopyFilesToClipboard(HWND owner, const std::vector<std::wstring>& files) {
+    if (files.empty()) return false;
+    if (TestMode()) {
+        std::string line = "clipboard:";
+        for (const auto& f : files) line += " " + Utf8(FullPath(f));
+        TimingLog(line.c_str());
+        return true;
+    }
+    // DROPFILES followed by the full paths, each NUL-terminated, plus a final NUL.
+    std::wstring list;
+    for (const auto& f : files) {
+        list += FullPath(f);
+        list.push_back(L'\0');
+    }
+    list.push_back(L'\0');
+    HGLOBAL drop = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DROPFILES) + list.size() * sizeof(wchar_t));
+    HGLOBAL effect = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+    if (!drop || !effect) {
+        if (drop) GlobalFree(drop);
+        if (effect) GlobalFree(effect);
+        return false;
+    }
+    auto* df = (DROPFILES*)GlobalLock(drop);
+    df->pFiles = sizeof(DROPFILES);
+    df->fWide = TRUE;
+    memcpy(df + 1, list.data(), list.size() * sizeof(wchar_t));
+    GlobalUnlock(drop);
+    *(DWORD*)GlobalLock(effect) = DROPEFFECT_COPY;
+    GlobalUnlock(effect);
+    // Another program may hold the clipboard for a moment.
+    bool open = false;
+    for (int i = 0; i < 10 && !(open = OpenClipboard(owner) != FALSE); i++) Sleep(20);
+    bool ok = false;
+    if (open) {
+        EmptyClipboard();
+        ok = SetClipboardData(CF_HDROP, drop) != nullptr;
+        if (ok) drop = nullptr;  // owned by the clipboard now
+        if (SetClipboardData(RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT), effect)) effect = nullptr;
+        CloseClipboard();
+    }
+    if (drop) GlobalFree(drop);
+    if (effect) GlobalFree(effect);
+    return ok;
 }
 
 }  // namespace util

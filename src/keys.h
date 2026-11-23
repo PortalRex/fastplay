@@ -24,7 +24,7 @@ enum class Act : int {
     Stats, Properties, EditSettings, Menu,
     Playlist, OpenUrl, AspectNext, RotateCW, RotateCCW, FlipH, FlipV, Deinterlace,
     BrightnessUp, BrightnessDown, ContrastUp, ContrastDown, SaturationUp, SaturationDown, ColorReset,
-    Normalize, SubSizeUp, SubSizeDown, SubPosUp, SubPosDown, RepeatFile, OpenInFastCut, SaveClip, Help,
+    Normalize, SubSizeUp, SubSizeDown, SubPosUp, SubPosDown, RepeatFile, SaveClip, DiscordClip, MixAudio, Help,
     EditMode,
     // MPC-HC defaults added 2026-11-23
     Reopen, Recycle, LoadSubtitles, OpenLocation, BossKey, OsdTime, OsdFilename, SubLinePrev, SubLineNext,

@@ -8,9 +8,13 @@ std::string WriteProject(const std::wstring& mediaPath, const std::vector<Segmen
 std::vector<Segment> ReadProject(const std::string& text, double duration);                 // tolerant JSON5
 std::vector<std::pair<std::wstring, std::wstring>> ParseTags(const std::wstring& tags);
 
-// Same folder and file naming as FastCut (FASTCUT_HOME honoured), so FastCut and FastPlay's Edit mode share
-// autosaved segments for a file.
+// Autosaved segments for a file: <FastPlay data folder>\projects\<hash>.llc (FastCut's file naming).
 std::wstring AutosavePath(const std::wstring& mediaPath);
+// Where FastCut kept them (%APPDATA%\FastCut\projects, FASTCUT_HOME honoured). Only read, so segments saved before
+// Edit mode got its own folder still load.
+std::wstring LegacyAutosavePath(const std::wstring& mediaPath);
+// The autosave to load: FastPlay's own if there is one, else FastCut's; "" when neither exists.
+std::wstring FindAutosave(const std::wstring& mediaPath);
 
 // GetOpenFileName / GetSaveFileName filters (double-NUL terminated), same choices and order as FastCut.
 extern const wchar_t kImportFilter[];

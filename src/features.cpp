@@ -1,9 +1,12 @@
 // MPC-HC parity extras: playlist, after-playback, video/audio/subtitle tweaks, taskbar progress and buttons, file
-// associations, Open URL, help, FastCut hand-off and lossless clip export.
+// associations, Open URL, help and clip export.
 #include "app.h"
 #include "controls.h"
 #include "dialogs.h"
 #include "edit/editor.h"
+#include "edit/ffrun.h"
+#include "edit/exporter.h"
+#include "edit/media.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlobj.h>
@@ -463,46 +466,12 @@ void App::SetAssociations(bool on) {
     }
 }
 
-// ------------------------------------------------------------------------------------------------ FastCut, clips
-
-std::wstring App::FindFastCut() {
-    std::vector<std::wstring> c;
-    if (!s_.fastcutPath.empty()) c.push_back(s_.fastcutPath);
-    std::wstring exe = util::ExeDir();
-    c.push_back(exe + L"\\FastCut.exe");
-    c.push_back(exe + L"\\..\\FastCut\\FastCut.exe");
-    c.push_back(exe + L"\\..\\..\\fastcut\\dist\\FastCut.exe");  // side-by-side source checkouts
-    for (auto& p : c)
-        if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return util::FullPath(p);
-    return L"";
-}
-
-void App::OpenInFastCut() {
-    if (path_.empty()) return;
-    std::wstring fc = FindFastCut();
-    if (fc.empty()) {
-        MessageBoxW(hwnd_, L"FastCut.exe wasn't found. Put it next to fastplay.exe or set fastcut_path in fastplay.ini.",
-                    L"Edit in FastCut", MB_ICONINFORMATION);
-        return;
-    }
-    mpvx::SetFlag(mpv_, "pause", true);
-    wchar_t b[96];
-    swprintf(b, 96, L" --seek=%.3f", mpvx::GetDouble(mpv_, "time-pos", 0));
-    std::wstring args = Quote(path_) + b;
-    if (bar_.abA >= 0 && bar_.abB > bar_.abA) {
-        swprintf(b, 96, L" --segment=%.3f,%.3f", bar_.abA, bar_.abB);
-        args += b;
-    }
-    ShellExecuteW(hwnd_, L"open", fc.c_str(), args.c_str(), util::DirName(fc).c_str(), SW_SHOWNORMAL);
-}
+// ------------------------------------------------------------------------------------------------ clips
 
 std::wstring App::FindFfmpeg() {
-    std::wstring ffmpeg = s_.ffmpegPath;
-    if (ffmpeg.empty()) {
-        wchar_t found[MAX_PATH * 2];
-        if (SearchPathW(nullptr, L"ffmpeg.exe", nullptr, (DWORD)std::size(found), found, nullptr)) ffmpeg = found;
-    }
-    return !ffmpeg.empty() && GetFileAttributesW(ffmpeg.c_str()) != INVALID_FILE_ATTRIBUTES ? ffmpeg : L"";
+    // Same lookup as Edit mode: ffmpeg_path, next to fastplay.exe, then PATH.
+    const std::wstring& ffmpeg = edit::ff::Ffmpeg();
+    return ffmpeg.find(L'\\') != std::wstring::npos ? ffmpeg : L"";
 }
 
 void App::SaveClip() {
@@ -517,7 +486,7 @@ void App::SaveClip() {
     }
     std::wstring ffmpeg = FindFfmpeg();
     if (ffmpeg.empty()) {
-        MessageBoxW(hwnd_, L"ffmpeg.exe wasn't found on PATH. Set ffmpeg_path in fastplay.ini.", L"Save clip", MB_ICONINFORMATION);
+        MessageBoxW(hwnd_, edit::ff::MissingToolsMessage().c_str(), L"Save clip", MB_ICONINFORMATION);
         return;
     }
     std::wstring name = util::FileName(path_);
@@ -598,7 +567,125 @@ void App::OnClipDone(bool ok, std::wstring* msg) {
     clipProcess_ = nullptr;
     clipBusy_ = false;
     if (!ok) DeleteFileW(clipOut_.c_str());  // our own partial output
+    edit::EditSettings es;
+    es.Load(ini_);
+    if (ok && es.copyToClipboard && util::CopyFilesToClipboard(hwnd_, {clipOut_})) *m += L" (copied: Ctrl+V to paste it)";
     mpvx::ShowText(mpv_, *m, 4000);
+}
+
+struct DiscordClipResult {
+    bool ok = false, cancelled = false;
+    std::wstring msg;
+    std::vector<std::wstring> files;
+};
+
+// One key from View mode: the A-B range as a Discord-ready MP4 under discord_clip_mb, made by Edit mode's exporter
+// (smart cut: H.264 stays lossless except the first GOP; HEVC/AV1/10-bit re-encoded to fit), then put on the
+// clipboard. Pressing the key again while it runs cancels it.
+void App::DiscordClip() {
+    if (path_.empty() || path_.find(L"://") != std::wstring::npos) return;
+    if (dclipBusy_) {
+        if (dclipCancel_) dclipCancel_->flag = true;
+        mpvx::ShowText(mpv_, L"Cancelling the Discord clip...", 2000);
+        return;
+    }
+    if (bar_.abA < 0 || bar_.abB <= bar_.abA) {
+        mpvx::ShowText(mpv_, L"Set the clip with the A-B loop first ([ = start, ] = end)", 3000);
+        return;
+    }
+    if (!edit::ff::Available()) {
+        MessageBoxW(hwnd_, edit::ff::MissingToolsMessage().c_str(), L"Discord clip", MB_ICONINFORMATION);
+        return;
+    }
+    edit::EditSettings es;
+    es.Load(ini_);  // output folder, metadata and fast-start choices from Edit mode's settings
+    es.discordReady = true;
+    es.discordSizeMB = s_.discordClipMB;
+    es.cutMode = L"smart";
+    es.merge = false;
+    es.format = L"same";  // Discord-ready turns any video into .mp4
+    es.nameTemplate = L"{name}-{start}-{end}";
+    es.mixAudio = s_.mixAudioTracks;
+    wchar_t env[MAX_PATH];
+    if (util::TestMode())  // never write next to the user's media from a test copy
+        es.outDir = GetEnvironmentVariableW(L"FASTPLAY_EDIT_OUT", env, MAX_PATH) ? env : util::LocalCacheDir();
+    edit::Segment seg;
+    seg.start = bar_.abA;
+    seg.end = bar_.abB;
+
+    if (dclipThread_.joinable()) dclipThread_.join();
+    dclipBusy_ = true;
+    dclipCancel_ = std::make_shared<edit::Cancel>();
+    mpvx::ShowText(mpv_, L"Making a Discord clip (" + edit::Fmt(seg.Duration()) + L")...", 2000);
+    HWND notify = hwnd_;
+    auto cancel = dclipCancel_;
+    std::wstring path = path_;
+    dclipThread_ = std::thread([notify, cancel, path, es, seg] {
+        auto* r = new DiscordClipResult;
+        try {
+            edit::MediaInfo m = edit::Probe(path, cancel.get());
+            std::vector<int> streams;
+            int audio = 0;
+            for (const auto& st : m.streams) {
+                if (!st.keep) continue;
+                if (st.encrypted) throw edit::EditError(L"This file is DRM-protected (copy-protected tracks), so it can't be cut.");
+                streams.push_back(st.index);
+                audio += st.type == "audio";
+            }
+            edit::KeyframeIndex kfi = m.Video() ? edit::Keyframes(m, m.Video()->index, cancel.get()) : edit::KeyframeIndex{};
+            std::atomic<int> lastPct{-2};
+            edit::ProgressFn progress = [&lastPct, notify](double f, const std::wstring& msg) {
+                int pct = f < 0 ? -1 : (int)(std::clamp(f, 0.0, 1.0) * 100);
+                if (lastPct.exchange(pct) == pct) return;
+                auto* text = new std::wstring(L"Discord clip: " + (pct >= 0 ? std::to_wstring(pct) + L"% " : L"") + msg);
+                if (!PostMessageW(notify, WM_APP_DCLIP_PROGRESS, 0, (LPARAM)text)) delete text;
+            };
+            edit::Exporter ex(m, es, streams, -1, 1, kfi, progress);
+            r->files = ex.Run({seg}, cancel.get());
+            if (!r->files.empty()) {
+                WIN32_FILE_ATTRIBUTE_DATA fa = {};
+                GetFileAttributesExW(r->files[0].c_str(), GetFileExInfoStandard, &fa);
+                uint64_t size = ((uint64_t)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+                if (size < 1024) {  // ffmpeg can succeed without writing frames (a range past the end of a recording in progress)
+                    DeleteFileW(r->files[0].c_str());
+                    throw edit::EditError(L"the clip came out empty (is the A-B range inside the recording?)");
+                }
+                wchar_t mb[32];
+                swprintf(mb, 32, L"%.1f MB", size / 1e6);
+                r->msg = L"Discord clip: " + util::FileName(r->files[0]) + L" (" + mb;
+                if (es.mixAudio && audio >= 2) r->msg += L", " + std::to_wstring(audio) + L" audio tracks mixed";
+                r->msg += L")";
+                r->ok = true;
+            }
+        } catch (const edit::Cancelled&) {
+            r->cancelled = true;
+        } catch (const edit::EditError& e) {
+            r->msg = e.msg;
+        } catch (const std::exception& e) {
+            r->msg = util::Wide(e.what());
+        }
+        if (!PostMessageW(notify, WM_APP_DCLIP_DONE, 0, (LPARAM)r)) delete r;
+    });
+}
+
+void App::OnDiscordClipDone(DiscordClipResult* raw) {
+    std::unique_ptr<DiscordClipResult> r(raw);
+    if (dclipThread_.joinable()) dclipThread_.join();
+    dclipBusy_ = false;
+    dclipCancel_.reset();
+    util::TimingLog(("discord clip: " + std::string(r->ok ? "ok " : r->cancelled ? "cancelled " : "failed ") +
+                     util::Utf8(r->msg)).c_str());
+    if (r->cancelled) {
+        mpvx::ShowText(mpv_, L"Discord clip cancelled", 2000);
+    } else if (!r->ok) {
+        std::wstring last = r->msg;
+        size_t nl = last.find_last_of(L'\n');
+        if (nl != std::wstring::npos) last = last.substr(nl + 1);
+        mpvx::ShowText(mpv_, L"Discord clip failed: " + last, 6000);
+    } else {
+        bool copied = util::CopyFilesToClipboard(hwnd_, r->files);
+        mpvx::ShowText(mpv_, r->msg + (copied ? L" copied: Ctrl+V to paste it" : L""), 5000);
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ help, URL
@@ -768,8 +855,13 @@ bool App::ExtraAction(Act a) {
     case Act::SubPosUp: mpvx::CmdAsync(mpv_, {"osd-msg", "add", "sub-pos", "-2"}); return true;
     case Act::SubPosDown: mpvx::CmdAsync(mpv_, {"osd-msg", "add", "sub-pos", "2"}); return true;
     case Act::RepeatFile: SetAfterPlayback(s_.afterPlayback == 2 ? 0 : 2); return true;
-    case Act::OpenInFastCut: OpenInFastCut(); return true;
     case Act::SaveClip: SaveClip(); return true;
+    case Act::DiscordClip: DiscordClip(); return true;
+    case Act::MixAudio:
+        s_.mixAudioTracks = !s_.mixAudioTracks;
+        ApplyAudioMix(true);
+        if (!audioMixed_) mpvx::ShowText(mpv_, s_.mixAudioTracks ? L"Mix all audio tracks: on" : L"Mix all audio tracks: off");
+        return true;
     default: return false;
     }
 }
@@ -829,6 +921,7 @@ void App::BuildExtraMenus(HMENU m, HMENU play, HMENU video, HMENU audio, HMENU s
     }
     AppendMenuW(audio, MF_POPUP, (UINT_PTR)boost, L"Volume boost");
     item(audio, Act::Normalize, false, f);
+    item(audio, Act::MixAudio, s_.mixAudioTracks);
 
     AppendMenuW(subs, MF_SEPARATOR, 0, nullptr);
     item(subs, Act::SubSizeUp, false, f);
@@ -840,8 +933,8 @@ void App::BuildExtraMenus(HMENU m, HMENU play, HMENU video, HMENU audio, HMENU s
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     item(m, Act::Playlist, plWnd_ && IsWindowVisible(plWnd_));
     HMENU tools = CreatePopupMenu();
-    item(tools, Act::OpenInFastCut, false, f && path_.find(L"://") == std::wstring::npos);
     item(tools, Act::SaveClip, false, f && bar_.abA >= 0 && bar_.abB > bar_.abA);
+    item(tools, Act::DiscordClip, false, f && bar_.abA >= 0 && bar_.abB > bar_.abA);
     AppendMenuW(tools, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(tools, MF_STRING, kCmdAssocOn, L"Register as video player (Open with / Default apps)...");
     AppendMenuW(tools, MF_STRING, kCmdAssocOff, L"Remove file type registration");

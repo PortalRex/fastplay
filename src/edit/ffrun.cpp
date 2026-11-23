@@ -14,8 +14,15 @@ bool IsFile(const std::wstring& p) {
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-// Next to fastplay.exe, else the PATH directories (only those, like FastCut), else the bare name.
+std::wstring g_ffmpegOverride;  // ffmpeg_path (fastplay.ini)
+
+// ffmpeg_path's folder, else next to fastplay.exe, else the PATH directories (only those, like FastCut), else the
+// bare name.
 std::wstring FindTool(const wchar_t* exe) {
+    if (!g_ffmpegOverride.empty()) {
+        std::wstring p = _wcsicmp(exe, L"ffmpeg.exe") == 0 ? g_ffmpegOverride : util::DirName(g_ffmpegOverride) + L"\\" + exe;
+        if (IsFile(p)) return p;
+    }
     std::wstring local = util::ExeDir() + L"\\" + exe;
     if (IsFile(local)) return local;
     DWORD n = GetEnvironmentVariableW(L"PATH", nullptr, 0);
@@ -110,6 +117,7 @@ public:
             if (errW) CloseHandle(errW);
             if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
             Close();
+            if (exe.find_first_of(L"\\/") == std::wstring::npos && e == ERROR_FILE_NOT_FOUND) throw EditError(MissingToolsMessage());
             throw EditError(L"Could not start " + exe + L": " + SystemMessage(e));
         };
         if (!CreatePipe(&out, &outW, &sa, 1 << 16) || !CreatePipe(&err, &errW, &sa, 1 << 16)) fail(GetLastError());
@@ -252,6 +260,14 @@ Log& TheLog() {
 }
 
 }  // namespace
+
+void SetFfmpegPath(const std::wstring& ffmpegExe) { g_ffmpegOverride = ffmpegExe; }
+
+std::wstring MissingToolsMessage() {
+    return L"ffmpeg.exe and ffprobe.exe weren't found. Edit mode and clip saving need them: put both next to "
+           L"fastplay.exe (" + util::ExeDir() + L"), add their folder to PATH, or set ffmpeg_path in fastplay.ini. "
+           L"The FastPlay release zip includes them.";
+}
 
 const std::wstring& Ffmpeg() {
     static const std::wstring p = FindTool(L"ffmpeg.exe");

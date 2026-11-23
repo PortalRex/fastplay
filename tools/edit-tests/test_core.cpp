@@ -614,18 +614,30 @@ static void TestSegio() {
     CHECK(im.size() == 2 && im[0].name == L"a, \"b\"" && im[1].start == 60 && im[1].end == 99, "csv import");
     TryDelete(p);
 
-    // Autosave path (compare with FastCut's SHA-1 naming; FASTCUT_HOME honoured).
-    // Expected names computed with .NET: SHA1(UTF8(Path.GetFullPath(p).ToLowerInvariant())) hex[..16].
+    // Autosave paths: FastCut's SHA-1 naming, in FastPlay's data folder; FastCut's own folder (FASTCUT_HOME honoured)
+    // is only read. Expected names computed with .NET: SHA1(UTF8(Path.GetFullPath(p).ToLowerInvariant())) hex[..16].
     std::wstring ap = segio::AutosavePath(L"D:\\Recordings\\Streams\\GTA\\2026-11-19 16-07-46.mp4");
     printf("  AutosavePath = %s\n", U(ap).c_str());
     CHECK(util::FileName(ap) == L"C85D6BC5015E0D65.llc", "autosave name");
+    CHECK(ap.rfind(util::DataDir() + L"\\projects\\", 0) == 0, "autosave in FastPlay's folder");
     CHECK(util::FileName(segio::AutosavePath(L"C:\\M\u00e9dia\\\u00dcBER \u00c4rger \u00c7A.mkv")) == L"42E3B019F90D6569.llc",
           "autosave name (non-ASCII)");
     SetEnvironmentVariableW(L"FASTCUT_HOME", L"X:\\fc-home");
-    std::wstring ap2 = segio::AutosavePath(L"d:\\recordings\\streams\\gta\\2026-11-19 16-07-46.MP4");
+    std::wstring ap2 = segio::LegacyAutosavePath(L"d:\\recordings\\streams\\gta\\2026-11-19 16-07-46.MP4");
     SetEnvironmentVariableW(L"FASTCUT_HOME", nullptr);
-    printf("  AutosavePath (FASTCUT_HOME=X:\\fc-home, other case) = %s\n", U(ap2).c_str());
-    CHECK(ap2.rfind(L"X:\\fc-home\\projects\\", 0) == 0 && util::FileName(ap2) == util::FileName(ap), "autosave home + case");
+    printf("  LegacyAutosavePath (FASTCUT_HOME=X:\\fc-home, other case) = %s\n", U(ap2).c_str());
+    CHECK(ap2.rfind(L"X:\\fc-home\\projects\\", 0) == 0 && util::FileName(ap2) == util::FileName(ap), "legacy home + case");
+    // FindAutosave: FastPlay's own first, else FastCut's.
+    std::wstring media = g_tmp + L"\\autosave-media.mp4", home = g_tmp + L"\\fc-home";
+    SetEnvironmentVariableW(L"FASTCUT_HOME", home.c_str());
+    std::wstring legacy = segio::LegacyAutosavePath(media);
+    CreateDirectoryW(home.c_str(), nullptr);
+    CreateDirectoryW((home + L"\\projects").c_str(), nullptr);
+    if (FILE* f = _wfopen(legacy.c_str(), L"wb")) { fputs("{}", f); fclose(f); }
+    CHECK(segio::FindAutosave(media) == legacy, "falls back to FastCut's autosave");
+    DeleteFileW(legacy.c_str());
+    CHECK(segio::FindAutosave(media).empty(), "nothing saved: empty");
+    SetEnvironmentVariableW(L"FASTCUT_HOME", nullptr);
 }
 
 int wmain(int argc, wchar_t** argv) {

@@ -2,6 +2,7 @@
 #include "app.h"
 #include "controls.h"
 #include "edit/editor.h"
+#include "edit/ffrun.h"
 #include <algorithm>
 
 App* g_app = nullptr;
@@ -43,6 +44,7 @@ int App::Run(HINSTANCE inst, const std::vector<std::wstring>& args) {
     if (GetFileAttributesExW(iniPath_.c_str(), GetFileExInfoStandard, &fa)) iniTime_ = fa.ftLastWriteTime;
     s_.Load(ini_);
     keys_.Load(ini_);
+    edit::ff::SetFfmpegPath(s_.ffmpegPath);  // only remembered; nothing is searched until ffmpeg is first needed
     bar_.volume = s_.volume;
     bar_.volumeMax = s_.volumeMax;
     if (startInTray) s_.tray = true;  // started as the warm instance: closing goes back to the tray
@@ -285,6 +287,10 @@ void App::Open(const std::wstring& rawPath) {
         pendingStart_ = start;
         return;
     }
+    if (audioMixed_) {  // the mix graph names this file's tracks; the next one may have fewer
+        mpvx::SetStr(mpv_, "lavfi-complex", "");
+        audioMixed_ = false;
+    }
     IssueLoad(mpv_, path, start);
     if (EditActive()) mpvx::SetFlag(mpv_, "pause", true);  // Edit mode opens files paused, like FastCut
 }
@@ -446,6 +452,7 @@ void App::DrainEvents() {
         case MPV_EVENT_FILE_LOADED:
             util::TimingLog("file loaded");
             UpdateTitle();
+            ApplyAudioMix(false);
             break;
         case MPV_EVENT_VIDEO_RECONFIG:
             break;

@@ -1,4 +1,5 @@
 #include "settings.h"
+#include <algorithm>
 #include <cstdio>
 #include <cwctype>
 
@@ -148,6 +149,8 @@ void Settings::Load(const Ini& ini) {
     autofit = ini.GetInt(s, L"autofit", autofit) != 0;
     autofitPercent = ini.GetInt(s, L"autofit_percent", autofitPercent);
     exactSeek = ini.GetInt(s, L"exact_seek", exactSeek) != 0;
+    mixAudioTracks = ini.GetInt(s, L"mix_audio_tracks", mixAudioTracks) != 0;
+    discordClipMB = std::max(0, ini.GetInt(s, L"discord_clip_mb", discordClipMB));
     thumbnails = ini.GetInt(s, L"thumbnails", thumbnails) != 0;
     thumbCache = ini.GetInt(s, L"thumbnail_cache", thumbCache);
     forceWindow = ini.GetInt(s, L"early_video_output", forceWindow) != 0;
@@ -167,7 +170,6 @@ void Settings::Load(const Ini& ini) {
     afterPlayback = ini.GetInt(s, L"after_playback", afterPlayback);
     volumeMax = ini.GetInt(s, L"volume_max", volumeMax);
     taskbarProgress = ini.GetInt(s, L"taskbar_progress", taskbarProgress) != 0;
-    fastcutPath = ini.Get(s, L"fastcut_path", fastcutPath);
     ffmpegPath = ini.Get(s, L"ffmpeg_path", ffmpegPath);
     onTop = ini.GetInt(s, L"on_top", onTop) != 0;
     showControls = ini.GetInt(s, L"show_controls", showControls) != 0;
@@ -189,6 +191,8 @@ void Settings::Save(Ini& ini) const {
     ini.Set(s, L"autofit", autofit ? L"1" : L"0");
     ini.Set(s, L"autofit_percent", std::to_wstring(autofitPercent));
     ini.Set(s, L"exact_seek", exactSeek ? L"1" : L"0");
+    ini.Set(s, L"mix_audio_tracks", mixAudioTracks ? L"1" : L"0");
+    ini.Set(s, L"discord_clip_mb", std::to_wstring(discordClipMB));
     ini.Set(s, L"thumbnails", thumbnails ? L"1" : L"0");
     ini.Set(s, L"thumbnail_cache", std::to_wstring(thumbCache));
     ini.Set(s, L"early_video_output", forceWindow ? L"1" : L"0");
@@ -208,7 +212,6 @@ void Settings::Save(Ini& ini) const {
     ini.Set(s, L"after_playback", std::to_wstring(afterPlayback));
     ini.Set(s, L"volume_max", std::to_wstring(volumeMax));
     ini.Set(s, L"taskbar_progress", taskbarProgress ? L"1" : L"0");
-    ini.Set(s, L"fastcut_path", fastcutPath);
     ini.Set(s, L"ffmpeg_path", ffmpegPath);
     ini.Set(s, L"on_top", onTop ? L"1" : L"0");
     ini.Set(s, L"show_controls", showControls ? L"1" : L"0");

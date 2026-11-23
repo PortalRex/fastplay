@@ -79,6 +79,8 @@ struct EditSettings {
     bool avoidNegativeTs = true, fastStart = true, confirmExport = true, verifyOutputs = true;
     bool discordReady = true;
     int discordSizeMB = 0;
+    bool copyToClipboard = true;             // exported files go on the clipboard (Ctrl+V in Discord / Explorer)
+    bool mixAudio = false;                   // FastPlay's mix_audio_tracks (not stored in [edit]; set per job)
     bool sameDiskTipAnswered = false;
     std::wstring batchMode = L"same";        // same | saved | trim
     double batchTrimStart = 0, batchTrimEnd = 0;

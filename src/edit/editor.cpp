@@ -1035,7 +1035,7 @@ void Editor::OnLoaded(LoadResult* raw, unsigned serial) {
     std::unique_ptr<LoadResult> r(raw);
     if (serial != loadSerial_) return;
     if (!r->media) {
-        SetStatus(L"Could not read file: " + r->error);
+        SetStatus(ff::Available() ? L"Could not read file: " + r->error : ff::MissingToolsMessage(), L"", 3);
         UpdateUiForMedia();
         return;
     }
@@ -1303,6 +1303,7 @@ EditSettings Editor::JobSettings() const {
         // Test runs must never write next to the user's media: without FASTPLAY_EDIT_OUT they go to FastPlay's cache.
         s.outDir = GetEnvironmentVariableW(L"FASTPLAY_EDIT_OUT", env, MAX_PATH) ? env : util::LocalCacheDir();
     }
+    s.mixAudio = app_->s_.mixAudioTracks;
     return s;
 }
 

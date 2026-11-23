@@ -135,6 +135,7 @@ void EditSettings::Load(const Ini& ini) {
     verifyOutputs = GetBool(ini, L"verify_outputs", verifyOutputs);
     discordReady = GetBool(ini, L"discord_ready", discordReady);
     discordSizeMB = ini.GetInt(kSec, L"discord_size_mb", discordSizeMB);
+    copyToClipboard = GetBool(ini, L"copy_to_clipboard", copyToClipboard);
     sameDiskTipAnswered = GetBool(ini, L"same_disk_tip_answered", sameDiskTipAnswered);
     batchMode = ini.Get(kSec, L"batch_mode", batchMode);
     batchTrimStart = ini.GetDouble(kSec, L"batch_trim_start", batchTrimStart);
@@ -180,6 +181,7 @@ void EditSettings::Save(Ini& ini) const {
     SetBool(ini, L"verify_outputs", verifyOutputs);
     SetBool(ini, L"discord_ready", discordReady);
     ini.Set(kSec, L"discord_size_mb", std::to_wstring(discordSizeMB));
+    SetBool(ini, L"copy_to_clipboard", copyToClipboard);
     SetBool(ini, L"same_disk_tip_answered", sameDiskTipAnswered);
     ini.Set(kSec, L"batch_mode", batchMode);
     SetNum(ini, L"batch_trim_start", batchTrimStart);

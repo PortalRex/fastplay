@@ -51,6 +51,35 @@ Args SrcIn(const std::wstring& path) {
     return a;
 }
 
+// Whether this ffmpeg has the dav1d AV1 decoder (asked once).
+bool HasDav1d() {
+    static const bool has = [] {
+        try {
+            Cancel never;
+            auto r = ff::Run(ff::Ffmpeg(), {L"-hide_banner", L"-decoders"}, &never, {}, {}, false);
+            return r.out.find("libdav1d") != std::string::npos;
+        } catch (...) {
+            return false;
+        }
+    }();
+    return has;
+}
+
+// AV1 sources (NVIDIA / AMD recordings): builds without dav1d pick libaom-av1, which fails on NVENC AV1 ("Decode error
+// rate 1 exceeds maximum"). ffmpeg's own AV1 decoder works through the GPU. Harmless on inputs that are only copied.
+Args AvDecoder(const MediaInfo& m) {
+    const StreamInfo* v = m.Video();
+    if (!v || v->codec != "av1") return {};
+    if (HasDav1d()) return {L"-c:v", L"libdav1d"};
+    return {L"-hwaccel", L"auto", L"-c:v", L"av1"};
+}
+
+Args SrcIn(const MediaInfo& m) {
+    Args a = AvDecoder(m);
+    Add(a, SrcIn(m.path));
+    return a;
+}
+
 std::wstring Combine(const std::wstring& dir, const std::wstring& name) {
     if (dir.empty()) return name;
     wchar_t last = dir.back();
@@ -446,7 +475,7 @@ struct Exporter::Impl {
         Args input = Head();
         Add(input, SourceOptions());
         Add(input, {L"-hwaccel", L"auto", L"-ss", Num(seg.start)});
-        Add(input, SrcIn(m.path));
+        Add(input, SrcIn(m));
         Add(input, {L"-t", Num(dur)});  // decoded, so exact
         Args tail = Maps(kept);
         if (!scale.empty()) Add(tail, {L"-vf", scale});
@@ -528,11 +557,11 @@ struct Exporter::Impl {
         Args a;
         if (from <= 0.0005) {  // from the very start: keep frames with negative dts
             Add(a, {L"-copyts", L"-start_at_zero"});
-            Add(a, SrcIn(m.path));
+            Add(a, SrcIn(m));
             Add(a, {L"-to", Num(to)});
         } else {
             Add(a, {L"-ss", Num(std::max(0.0, from - Preroll())), L"-copyts", L"-start_at_zero"});
-            Add(a, SrcIn(m.path));
+            Add(a, SrcIn(m));
             Add(a, {L"-ss", Num(from), L"-to", Num(to)});
         }
         return a;
@@ -562,15 +591,15 @@ struct Exporter::Impl {
         bool whole = seg.start <= 0.0005 && seg.end >= m.duration - 0.0005;
         int ki = LastKeyframeAtOrBefore(seg.start);
         if (whole) {
-            Add(a, SrcIn(m.path));
+            Add(a, SrcIn(m));
         } else if (speed != 1) {
             // Timestamps are rescaled, so keep the simple forms.
             if (mode == L"exact") {
-                Add(a, SrcIn(m.path));
+                Add(a, SrcIn(m));
                 Add(a, {L"-ss", Num(seg.start / speed), L"-t", Num(dur)});
             } else {
                 Add(a, {L"-ss", Num(seg.start)});
-                Add(a, SrcIn(m.path));
+                Add(a, SrcIn(m));
                 Add(a, {L"-t", Num(dur)});
             }
         } else if (mode == L"exact") {
@@ -579,7 +608,7 @@ struct Exporter::Impl {
             Add(a, CopyRange(keyframes[ki] - DtsMargin(ki), seg.end));  // starts exactly at the keyframe before
         } else {  // keyframes unknown: let the demuxer pick
             Add(a, {L"-ss", Num(seg.start)});
-            Add(a, SrcIn(m.path));
+            Add(a, SrcIn(m));
             Add(a, {L"-t", Num(dur)});
         }
         if (speed != 1)  // audio cannot be retimed losslessly
@@ -656,11 +685,11 @@ struct Exporter::Impl {
         if (LooseSeek()) {
             double preH = std::max(0.0, seg.start - Preroll());
             Add(encodeInput, {L"-ss", Num(preH)});
-            Add(encodeInput, SrcIn(m.path));
+            Add(encodeInput, SrcIn(m));
             Add(encodeInput, {L"-ss", Num(seg.start - preH), L"-t", Num(headEnd - seg.start)});
         } else {
             Add(encodeInput, {L"-ss", Num(seg.start), L"-t", Num(headEnd - seg.start)});
-            Add(encodeInput, SrcIn(m.path));
+            Add(encodeInput, SrcIn(m));
         }
         Add(encodeInput, {L"-map", L"0:" + I(v->index), L"-fps_mode", L"passthrough"});
         std::wstring encMsg = msg + (noKeyframeInside ? L" (encoding)" : L" (encoding start)");
@@ -701,7 +730,7 @@ struct Exporter::Impl {
             Args a = Head();
             double from = noKeyframeInside ? seg.start : std::min(seg.start, kf - DtsMargin(ki));
             Add(a, {L"-ss", Num(std::max(0.0, from - Preroll())), L"-copyts", L"-start_at_zero"});
-            Add(a, SrcIn(m.path));
+            Add(a, SrcIn(m));
             if (!noKeyframeInside)
                 Add(a, {L"-map", L"0:" + I(v->index), L"-c", L"copy", L"-ss", Num(std::max(0.0, kf - DtsMargin(ki))), L"-to",
                         Num(seg.end), L"-f", L"mpegts", tail});
@@ -726,7 +755,7 @@ struct Exporter::Impl {
         Add(a, SourceOptions());  // rotation override applies to the joined video
         Add(a, {L"-f", L"concat", L"-safe", L"0", L"-i", list});
         if (!others.empty()) Add(a, {L"-i", rest});
-        Add(a, SrcIn(m.path));  // only for metadata
+        Add(a, SrcIn(m));  // only for metadata
         int metaInput = others.empty() ? 1 : 2;
         Args maps = {L"-map", L"0:0"};
         if (!others.empty()) Add(maps, {L"-map", L"1"});
@@ -809,6 +838,43 @@ struct Exporter::Impl {
         return outPath;
     }
 
+    // "Mix all audio tracks" for Discord-ready exports: Discord (and most players) only play the first audio track, so
+    // game + mic recordings (ShadowPlay, OBS multi-track) would lose all but one. Lossless exports keep them apart.
+    int AudioKept() const {
+        if (speed != 1) return 0;  // audio is dropped then
+        auto k = KeptStreams();
+        return (int)std::count_if(k.begin(), k.end(), [](auto& st) { return st.type == "audio"; });
+    }
+    bool MixAudio() const { return s.mixAudio && s.discordReady && AudioKept() >= 2; }
+
+    // Rewrites an output with its audio tracks summed into one (video and subtitles copied).
+    void MixTracks(const std::wstring& path, double dur, double baseFrac, double span, Cancel* ct) const {
+        int n = AudioKept();
+        std::wstring ext = util::Lower(Ext(path)), graph;
+        for (int i = 0; i < n; i++) graph += L"[0:a:" + I(i) + L"]";
+        // normalize=0: plain sum, so neither track gets quieter than it was on its own. duration=first: as long as the
+        // first track ("longest" padded the clip with ~0.4 s of silence).
+        graph += L"amix=inputs=" + I(n) + L":duration=first:normalize=0[a]";
+        Args codec;
+        if (ext == L".webm" || ext == L".opus" || ext == L".ogg") codec = {L"-c:a", L"libopus", L"-b:a", L"160k"};
+        else if (ext == L".mp3") codec = {L"-c:a", L"libmp3lame", L"-b:a", L"192k"};
+        else if (ext == L".flac" || ext == L".mka") codec = {L"-c:a", L"flac"};
+        else if (ext == L".wav") codec = {L"-c:a", L"pcm_s16le"};
+        else codec = {L"-c:a", L"aac", L"-b:a", L"160k"};
+        std::wstring tmp = TempBase(util::DirName(path)) + ext;
+        Args a = Head();
+        Add(a, {L"-i", path, L"-filter_complex", graph, L"-map", L"0:v?", L"-map", L"[a]", L"-map", L"0:s?", L"-c", L"copy"});
+        Add(a, codec);
+        Add(a, {L"-map_metadata", L"0", L"-map_chapters", L"0"});
+        if (Mp4Like(ext)) Add(a, {L"-movflags", L"+faststart"});
+        a.push_back(tmp);
+        RunFf(a, dur, baseFrac, span, L"Mixing " + I(n) + L" audio tracks", ct);
+        if (!MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            TryDelete(tmp);
+            throw EditError(L"Could not replace " + util::FileName(path) + L" with the mixed version");
+        }
+    }
+
     std::vector<std::wstring> Run(const std::vector<Segment>& segs, Cancel* ct) {
         if (segs.empty()) throw EditError(L"No segments to export");
         CreateDirectoryW(OutDir().c_str(), nullptr);
@@ -828,6 +894,7 @@ struct Exporter::Impl {
                 TryDelete(outPath);
                 outPath = Merge(segs, ct);
             }
+            if (MixAudio()) MixTracks(outPath, sum / speed, 0.97, 0.03, ct);
             return {outPath};
         }
         std::vector<std::wstring> outputs;
@@ -841,6 +908,7 @@ struct Exporter::Impl {
                 rateFactor *= limit * 0.94 / FileSize(path);
                 CutOne(segs[i], path, (double)i / n, 1.0 / n, msg + L" (fitting the size limit)", ct);
             }
+            if (MixAudio()) MixTracks(path, segs[i].Duration() / speed, (i + 0.97) / n, 0.03 / n, ct);
             outputs.push_back(path);
         }
         return outputs;
@@ -851,8 +919,12 @@ struct Exporter::Impl {
         std::vector<std::wstring> issues;
         if (segs.empty()) return issues;
         std::vector<StreamInfo> kept;
-        for (auto& st : KeptStreams())
-            if (!(speed != 1 && st.type == "audio")) kept.push_back(st);
+        bool mixed = MixAudio(), firstAudio = true;
+        for (auto& st : KeptStreams()) {
+            if (speed != 1 && st.type == "audio") continue;
+            if (mixed && st.type == "audio" && !std::exchange(firstAudio, false)) continue;  // mixed into the first
+            kept.push_back(st);
+        }
         bool merged = s.merge && segs.size() > 1;
         auto isAv = [](const StreamInfo& st) { return st.type == "video" || st.type == "audio" || st.type == "subtitle"; };
         bool wantVideo = std::any_of(kept.begin(), kept.end(), [](auto& st) { return st.type == "video" && !st.isCoverArt; });
@@ -1200,7 +1272,7 @@ void JoinReencode(const std::vector<std::wstring>& files, const std::wstring& ou
 
 Args DetectArgs(const MediaInfo& m, const wchar_t* map, const wchar_t* filterOpt, const std::wstring& filter) {
     Args a = {L"-hide_banner", L"-nostdin", L"-v", L"info", L"-progress", L"pipe:1", L"-nostats", L"-hwaccel", L"auto"};
-    Add(a, SrcIn(m.path));
+    Add(a, SrcIn(m));
     Add(a, {L"-map", map, filterOpt, filter, L"-f", L"null", L"-"});
     return a;
 }
@@ -1211,7 +1283,7 @@ std::wstring Snapshot(const MediaInfo& m, double t, const std::wstring& outDir, 
     const StreamInfo& v = VideoOrThrow(m);
     std::wstring outPath = UniquePath(Combine(outDir, BaseName(m.path) + L"-" + Colons(Fmt(t)) + L"." + fmt));
     Args a = {L"-hide_banner", L"-nostdin", L"-y", L"-v", L"error", L"-ss", Num(t)};
-    Add(a, SrcIn(m.path));
+    Add(a, SrcIn(m));
     Add(a, {L"-map", L"0:" + I(v.index), L"-frames:v", L"1", L"-update", L"1"});
     if (fmt == L"jpg") Add(a, {L"-q:v", L"2"});
     a.push_back(outPath);
@@ -1225,7 +1297,7 @@ void SnapshotsEvery(const MediaInfo& m, double interval, double start, double en
     std::wstring pattern = Combine(outDir, BaseName(m.path) + L"-frame-%05d." + fmt);
     Args a = Head();
     Add(a, {L"-ss", Num(start), L"-t", Num(end - start)});
-    Add(a, SrcIn(m.path));
+    Add(a, SrcIn(m));
     Add(a, {L"-map", L"0:" + I(v.index), L"-vf", L"fps=1/" + Num(interval)});
     if (fmt == L"jpg") Add(a, {L"-q:v", L"2"});
     a.push_back(pattern);
@@ -1247,7 +1319,7 @@ std::vector<std::wstring> ExtractTracks(const MediaInfo& m, const std::vector<St
         std::wstring outPath = UniquePath(Combine(
             outDir, BaseName(m.path) + L"-track" + I(st.index) + L"-" + W(st.type) + lang + TrackExt(st)));
         Args a = Head();
-        Add(a, SrcIn(m.path));
+        Add(a, SrcIn(m));
         Add(a, {L"-map", L"0:" + I(st.index), L"-c", L"copy"});
         if (st.codec == "mov_text") Add(a, {L"-c:s", L"srt"});
         if (st.isCoverArt) Add(a, {L"-frames:v", L"1"});

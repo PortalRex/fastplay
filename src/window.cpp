@@ -494,6 +494,14 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
     case WM_APP_CLIP_DONE:
         OnClipDone(w != 0, (std::wstring*)l);
         return 0;
+    case WM_APP_DCLIP_PROGRESS: {
+        std::unique_ptr<std::wstring> text((std::wstring*)l);
+        if (dclipBusy_) mpvx::ShowText(mpv_, *text, 2000);
+        return 0;
+    }
+    case WM_APP_DCLIP_DONE:
+        OnDiscordClipDone((DiscordClipResult*)l);
+        return 0;
     case WM_APP_RECYCLED: {
         std::unique_ptr<std::wstring> name((std::wstring*)l);
         mpvx::ShowText(mpv_, (w ? L"Moved to the Recycle Bin: " : L"Could not move to the Recycle Bin: ") + *name, 3000);
@@ -877,6 +885,28 @@ void App::HoverSeek(double t, POINT anchor) {
     thumbWnd_->Show(th, t, anchor, dpi_);
 }
 
+// "Mix all audio tracks": mpv's lavfi-complex sums every audio track of the file into the one audio output (video
+// track selection stays normal). Only for files with two or more tracks; cleared before every load (Open), since a
+// graph naming tracks the next file doesn't have would stop it from playing.
+void App::ApplyAudioMix(bool announce) {
+    if (!mpv_ || !bar_.hasFile) return;
+    std::vector<int64_t> ids;
+    for (const auto& t : GetTracks(mpv_))
+        if (t.type == "audio") ids.push_back(t.id);
+    bool want = s_.mixAudioTracks && ids.size() >= 2;
+    if (!want && !audioMixed_) return;
+    std::string graph;
+    if (want) {
+        for (int64_t id : ids) graph += "[aid" + std::to_string(id) + "]";
+        graph += "amix=inputs=" + std::to_string(ids.size()) + ":duration=first:normalize=0[ao]";
+    }
+    mpvx::SetStr(mpv_, "lavfi-complex", graph.c_str());
+    audioMixed_ = want;
+    util::TimingLog(("audio mix: " + (want ? graph : std::string("off"))).c_str());
+    if (announce || want)
+        mpvx::ShowText(mpv_, want ? L"Mixing " + std::to_wstring(ids.size()) + L" audio tracks" : L"Mix all audio tracks: off", 2000);
+}
+
 void App::RunCommand(const std::wstring& cmd) {
     size_t sp = cmd.find(L' ');
     std::wstring verb = cmd.substr(0, sp), arg = sp == std::wstring::npos ? L"" : util::Trim(cmd.substr(sp + 1));
@@ -912,6 +942,10 @@ void App::RunCommand(const std::wstring& cmd) {
         util::TimingLog(editor_ ? util::Utf8(editor_->DebugState()).c_str() : "edit: none");
     } else if (verb == L"menu") {
         OnMenuCommand((UINT)_wtoi(arg.c_str()));
+    } else if (verb == L"set") {  // test hook: "set <property> <value>"
+        size_t sp2 = arg.find(L' ');
+        std::string name = util::Utf8(arg.substr(0, sp2)), value = sp2 == std::wstring::npos ? "" : util::Utf8(arg.substr(sp2 + 1));
+        mpvx::SetStr(mpv_, name.c_str(), value.c_str());
     } else if (verb == L"get") {
         util::TimingLog(("property " + util::Utf8(arg) + " = " + mpvx::GetStr(mpv_, util::Utf8(arg).c_str())).c_str());
     } else if (verb == L"state") {
@@ -1385,6 +1419,13 @@ void App::Quit() {
         DeleteFileW(clipOut_.c_str());
     }
     if (clipThread_.joinable()) clipThread_.join();
+    if (dclipCancel_) dclipCancel_->flag = true;  // kills its ffmpeg; the exporter removes its temp files
+    if (dclipThread_.joinable()) dclipThread_.join();
+    MSG done;  // results posted while we were joining
+    while (PeekMessageW(&done, hwnd_, WM_APP_DCLIP_PROGRESS, WM_APP_DCLIP_DONE, PM_REMOVE)) {
+        if (done.message == WM_APP_DCLIP_DONE) OnDiscordClipDone((DiscordClipResult*)done.lParam);
+        else delete (std::wstring*)done.lParam;
+    }
     if (taskbar_) {
         taskbar_->Release();
         taskbar_ = nullptr;

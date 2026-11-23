@@ -2,8 +2,8 @@
 
 A small, fast Windows video player and lossless editor, built to replace MPC-HC for everyday playback and FastCut for
 cutting, especially for huge OBS recordings (30+ GB, 1 h+, 1440p60). Native Win32 C++ around libmpv: no .NET, no Qt,
-no scripts. One ~1.6 MB exe; libmpv-2.dll sits next to it; ffmpeg/ffprobe (on PATH or next to the exe) are only used
-by Edit mode.
+no scripts. One ~1.6 MB exe; libmpv-2.dll sits next to it; ffmpeg/ffprobe are only used by Edit mode and clips (the
+release zip has them next to the exe; otherwise on PATH or `ffmpeg_path`, and FastPlay says plainly when they're missing).
 
 Two modes:
 
@@ -65,7 +65,10 @@ the pre-warm itself takes as long as the device libmpv would have created.
 - **Video**: aspect ratio override (4:3, 16:9, 1.85, 2.35, 21:9, 1:1), rotate (Alt+Num4/6), mirror, flip,
   deinterlace (Ctrl+Shift+D), brightness / contrast / saturation. Mirror and flip are software filters, so while one
   is on the decoder switches to copy-back mode by itself and goes back to zero-copy when both are off.
-- **Audio**: output device menu, volume boost up to 150 / 200 %, normalize (dynaudnorm).
+- **Audio**: output device menu, volume boost up to 150 / 200 %, normalize (dynaudnorm), **mix all audio tracks**
+  (on by default): files with two or more audio tracks (ShadowPlay game + mic, OBS multi-track) play them summed
+  together through mpv's `lavfi-complex` (`amix`, no level change), and Discord-ready exports mix them into one track
+  too, since Discord only plays the first. Lossless exports keep the tracks apart. Toggle in the Audio menu.
 - **Subtitles**: bigger/smaller, up/down, load external file.
 - **Taskbar**: progress on the taskbar button and Previous / Play-Pause / Next buttons in its thumbnail (set up after
   the first frame, so COM never touches start-up).
@@ -109,8 +112,9 @@ back to View mode's MPC-HC keys; remap in `fastplay.ini` `[edit_keys]`):
 - **Tools**: full-resolution snapshot (C), snapshots at segment starts or every N s, extract all tracks, merge files
   (lossless when they match, re-encoded otherwise), download URL / HLS, detect black / silence / scene changes, stream
   details, FFmpeg log (F12).
-- **Projects**: segments auto-save per file in the **same place and format as FastCut** (`%APPDATA%\FastCut\projects`,
-  same file names), so both programs see each other's segments; Ctrl+S saves `<name>-proj.llc` next to the file;
+- **Projects**: segments auto-save per file in `%APPDATA%\FastPlay\projects` (FastCut's file format and names). Segments
+  that FastCut saved (`%APPDATA%\FastCut\projects`) still load; that folder is only read. Ctrl+S saves
+  `<name>-proj.llc` next to the file;
   load `.llc` (also by dropping it); import / export segments as CSV, YouTube chapters, CUE, SRT, MPlayer EDL,
   FFmpeg metadata, LosslessCut projects.
 - **Batch export** (Files tab): every file with the current segments, each file's saved segments, or a start/end trim.
@@ -125,9 +129,21 @@ Faster than FastCut where it matters for big recordings:
   on a hard disk the status bar says so and *View > Show waveform* loads it on request.
 - Leaving Edit mode releases the thumbnail decoder (working set 309 → 268 MB on the 32 GB file; View mode alone ~185 MB).
 
-Also kept from the previous version: **Save clip (lossless)** (Ctrl+Shift+S) in View mode writes the A-B loop range
-with `ffmpeg -c copy`, starting on the keyframe at or before A; and *Open in FastCut* (Tools menu) still hands the file
-to the separate FastCut app if you prefer it.
+Exported files go on the clipboard as files (like Explorer's Copy), so Ctrl+V attaches them in Discord or pastes them
+in a folder (Edit-mode Settings: *Copy exported files to the clipboard*, `copy_to_clipboard` in `[edit]`).
+
+AV1 sources (NVIDIA / AMD recordings) are decoded with dav1d when the ffmpeg build has it, else with ffmpeg's own AV1
+decoder on the GPU: builds without dav1d otherwise pick libaom, which fails on NVENC AV1.
+
+From View mode, without opening Edit mode:
+
+- **Discord clip** (Ctrl+Shift+C, also in Tools): set the A-B loop (`[` and `]`) and press it. Edit mode's exporter
+  makes a smart-cut MP4 under `discord_clip_mb` (10 MB): H.264 stays lossless except up to the first keyframe,
+  HEVC / AV1 / 10-bit or anything too big is re-encoded (NVENC, scaled down when needed), audio tracks are mixed. The
+  file lands in Edit mode's output folder (next to the source by default) and goes on the clipboard: Ctrl+V in
+  Discord. Progress shows on screen; pressing the key again cancels.
+- **Save clip (lossless)** (Ctrl+Shift+S) writes the A-B loop range with `ffmpeg -c copy`, starting on the keyframe
+  at or before A, and copies it to the clipboard too.
 
 Tested in the running app (off-screen, driven by `fpctl` commands) on the 32 GB recording: I/O marking, undo/redo,
 include toggling, keyframe export (2 files), smart-cut merge, Discord ≤ 10 MB merge (8.6 MB, 720p H.264), all
@@ -169,6 +185,7 @@ FastPlay has. The rest are FastPlay's own and use keys MPC-HC leaves free.
 | Shift+F10 | Properties | O | Options (opens fastplay.ini) |
 | Apps / right-click | Menu | Ctrl+7 | Playlist |
 | E | Edit mode | Ctrl+Shift+S | Save A-B clip (lossless) |
+| Ctrl+Shift+C | Discord clip of the A-B range (copied) | | |
 | Ctrl+U | Open URL | Ctrl+Shift+D | Deinterlace |
 | Ctrl+F1 | Shortcut list | | |
 
@@ -190,6 +207,8 @@ with every setting and key binding listed. **O** opens it in Notepad; changes ap
 | `remember_position` | 1 | Resume where you left off |
 | `autofit` / `autofit_percent` | 1 / 75 | Size the window to the video at 75 % of the screen (MPC-HC auto-fit) |
 | `exact_seek` | 0 | Keyboard jumps land on exact frames instead of keyframes |
+| `mix_audio_tracks` | 1 | Play (and Discord-export) all audio tracks of a file mixed together |
+| `discord_clip_mb` | 10 | Size limit of the Ctrl+Shift+C Discord clip (0 = none) |
 | `thumbnails` / `thumbnail_cache` | 1 / 150 | Seekbar previews |
 | `early_video_output` | 1 | Create the GPU output while the file opens |
 | `prefetch` | 1 | Read the start region in parallel with libmpv start-up |
@@ -202,7 +221,7 @@ with every setting and key binding listed. **O** opens it in Notepad; changes ap
 | `after_playback` | 0 | 0 nothing, 1 next file, 2 repeat, 3 close, 4 exit |
 | `volume_max` | 100 | 150 or 200 for boost |
 | `taskbar_progress` | 1 | Taskbar progress and thumbnail buttons |
-| `fastcut_path`, `ffmpeg_path` | | Override where FastCut / ffmpeg are found |
+| `ffmpeg_path` | | ffmpeg.exe to use (ffprobe.exe from the same folder); empty: next to the exe, then PATH |
 
 ## Build
 
@@ -216,7 +235,7 @@ Source map: `app.cpp` start-up, libmpv set-up, loading, events · `window.cpp` w
 fullscreen, tray · `controls.cpp` owner-drawn control bar and thumbnail popup · `mp4index.cpp` MP4 header index
 (ported from FastCut's `Mp4Index.cs`, extended for fragmented MP4) · `mkvindex.cpp` Matroska/WebM Cues index ·
 `thumbs.cpp` thumbnail decoder · `keys.cpp` actions and MPC-HC default bindings · `settings.cpp` ini, settings, resume store · `features.cpp` playlist,
-after playback, video/audio extras, taskbar, file types, FastCut and clip export, help · `dialogs.cpp` small dialogs.
+after playback, video/audio extras, taskbar, file types, clip and Discord-clip export, help · `dialogs.cpp` small dialogs.
 `src/edit/` (Edit mode): `editor.cpp` layout, loading, jobs · `editactions.cpp` actions, keys, menus, segments, export
  and tools · `panel.cpp` flat buttons/strips · `timeline.cpp`, `segcards.cpp` (+ `uicanvas.h`) the two big controls ·
 `exporter.cpp` all cut modes, Discord, merge, verify, tools · `media.cpp` probe, keyframes, waveform · `ffrun.cpp`

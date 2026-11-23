@@ -20,6 +20,8 @@ enum : UINT {
     WM_APP_DISABLE_CHILD,      // mpv created its video window: make it mouse-transparent
     WM_APP_CLIP_DONE,          // lossless clip export finished (wParam = ok, lParam = std::wstring* message)
     WM_APP_RECYCLED,           // a file went to the Recycle Bin (wParam = ok, lParam = std::wstring* name)
+    WM_APP_DCLIP_PROGRESS,     // Discord clip progress (lParam = std::wstring* text)
+    WM_APP_DCLIP_DONE,         // Discord clip finished (lParam = DiscordClipResult*)
 };
 
 // Menu / taskbar command ids shared by window.cpp and features.cpp.
@@ -57,7 +59,8 @@ struct BarState {
 
 class ControlBar;
 class ThumbPopup;
-namespace edit { class Editor; }
+namespace edit { class Editor; struct Cancel; }
+struct DiscordClipResult;
 
 class App {
     friend class edit::Editor;  // Edit mode drives the player directly
@@ -146,7 +149,7 @@ private:
     void PanZoom(double dx, double dy, double dz);
     void ChangeSpeed(int dir);
 
-    // features.cpp: playlist, after playback, video/audio extras, taskbar, associations, FastCut, clips, help
+    // features.cpp: playlist, after playback, video/audio extras, taskbar, associations, clips, help
     void OpenFiles(const std::vector<std::wstring>& files, bool append);
     bool StepPlaylist(int dir);
     void OnEndOfFile();
@@ -163,12 +166,13 @@ private:
     void AdjustColor(const char* prop, int delta);
     std::vector<std::pair<std::string, std::wstring>> AudioDevices();
     void SetAssociations(bool on);
-    std::wstring FindFastCut();
-    void OpenInFastCut();
     void SaveClip();                                                  // asks for the output name
     void StartClip(const std::wstring& out, const std::wstring& ffmpeg); // runs ffmpeg -c copy on the A-B range
     std::wstring FindFfmpeg();
     void OnClipDone(bool ok, std::wstring* msg);
+    void DiscordClip();                                               // A-B range -> small MP4, copied (Ctrl+Shift+C)
+    void OnDiscordClipDone(DiscordClipResult* r);
+    void ApplyAudioMix(bool announce);                                // mpv lavfi-complex amix of all audio tracks
     void ShowHelp();
     void OpenUrlDialog();
     bool ExtraAction(Act a);           // handles the actions added in features.cpp
@@ -262,6 +266,13 @@ private:
     HANDLE clipProcess_ = nullptr;
     std::wstring clipOut_;
     bool clipBusy_ = false;
+
+    // Discord clip (Edit mode's exporter on a worker thread, no Edit-mode UI)
+    std::thread dclipThread_;
+    std::shared_ptr<edit::Cancel> dclipCancel_;
+    bool dclipBusy_ = false;
+
+    bool audioMixed_ = false;  // lavfi-complex is mixing this file's audio tracks
 
     // Edit mode (src/edit), created the first time it is used
     edit::Editor* editor_ = nullptr;

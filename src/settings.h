@@ -31,6 +31,8 @@ struct Settings {
     bool autofit = true;           // size the window to the video (fit to 75% of the screen)
     int autofitPercent = 75;
     bool exactSeek = false;        // keyboard seeks land on exact frames instead of keyframes
+    bool mixAudioTracks = true;    // play all audio tracks mixed (game + mic recordings); Discord exports mix them too
+    int discordClipMB = 10;        // size limit of the one-key Discord clip (0 = none)
     bool thumbnails = true;
     int thumbCache = 150;          // max thumbnails held in memory
     bool forceWindow = true;       // create the video output while the file opens (overlap GPU init with I/O)
@@ -50,8 +52,7 @@ struct Settings {
     int afterPlayback = 0;         // 0 nothing, 1 next file, 2 repeat file, 3 close, 4 exit (MPC-HC "After playback")
     int volumeMax = 100;           // up to 200 for boost
     bool taskbarProgress = true;   // progress + play/pause/prev/next buttons on the taskbar thumbnail
-    std::wstring fastcutPath;      // FastCut.exe (empty: next to FastPlay, or the fastcut/dist folder beside it)
-    std::wstring ffmpegPath;       // for lossless clip export (empty: ffmpeg.exe on PATH)
+    std::wstring ffmpegPath;       // ffmpeg.exe for Edit mode and clips (empty: next to fastplay.exe, else PATH)
     bool onTop = false;
     bool showControls = true;
     bool showCaption = true;

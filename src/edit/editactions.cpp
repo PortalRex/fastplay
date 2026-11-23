@@ -1189,8 +1189,8 @@ static std::wstring ProjectNextTo(const std::wstring& media) {
 
 std::vector<Segment> Editor::LoadAutosave(const std::wstring& path) {
     try {
-        std::wstring p = segio::AutosavePath(path), llc = ProjectNextTo(path);
-        std::wstring src = FileExists(llc) ? llc : FileExists(p) ? p : L"";  // a project next to the file wins
+        std::wstring llc = ProjectNextTo(path);
+        std::wstring src = FileExists(llc) ? llc : segio::FindAutosave(path);  // a project next to the file wins
         if (src.empty()) return {};
         return Colorize(segio::ReadProject(ReadAll(src), media_ ? media_->duration : 0));
     } catch (...) {
@@ -1203,7 +1203,13 @@ void Editor::SaveAutosave() {
     try {
         std::wstring p = segio::AutosavePath(file_);
         if (segs_.empty()) {
-            TryDelete(p);
+            // FastCut's old autosave is never touched, so an empty project here keeps it from coming back.
+            if (FileExists(segio::LegacyAutosavePath(file_))) {
+                SHCreateDirectoryExW(nullptr, util::DirName(p).c_str(), nullptr);
+                WriteAll(p, segio::WriteProject(file_, segs_));
+            } else {
+                TryDelete(p);
+            }
             return;
         }
         SHCreateDirectoryExW(nullptr, util::DirName(p).c_str(), nullptr);
@@ -1358,6 +1364,10 @@ void Editor::Export(bool onlySelected) {
         std::wstring what = outs.size() == 1 ? L"Exported " + util::FileName(outs[0])
                                              : L"Exported " + std::to_wstring(outs.size()) + L" files to " + util::DirName(outs[0]);
         if (ex.Transcoded()) what += L" as H.264 for Discord";
+        if (settings.copyToClipboard && !outs.empty()) {
+            what += outs.size() == 1 ? L" (copied: Ctrl+V to paste it)" : L" (copied: Ctrl+V to paste them)";
+            Post([this, outs] { util::CopyFilesToClipboard(app_->hwnd_, outs); });
+        }
         if (verify) {
             p(-1, L"Checking outputs...");
             auto issues = ex.Verify(list, outs, ct);
@@ -1623,8 +1633,8 @@ void Editor::BatchExport() {
                     s.end = m.duration - settings.batchTrimEnd;
                     list.push_back(s);
                 } else if (settings.batchMode == L"saved") {
-                    std::wstring llc = ProjectNextTo(path), autos = segio::AutosavePath(path);
-                    std::wstring src = FileExists(llc) ? llc : FileExists(autos) ? autos : L"";
+                    std::wstring llc = ProjectNextTo(path);
+                    std::wstring src = FileExists(llc) ? llc : segio::FindAutosave(path);
                     if (!src.empty()) list = segio::ReadProject(ReadAll(src), m.duration);
                     if (list.empty()) {
                         Segment s;

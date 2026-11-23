@@ -503,13 +503,29 @@ std::wstring Combine(const std::wstring& a, const std::wstring& b) {
 
 }  // namespace
 
-std::wstring AutosavePath(const std::wstring& mediaPath) {
-    // SHA-1 of the UTF-8 lower-cased full path, first 16 upper-case hex digits (SegmentIO.AutosavePath).
+namespace {
+// SHA-1 of the UTF-8 lower-cased full path, first 16 upper-case hex digits (FastCut's SegmentIO.AutosavePath).
+std::wstring AutosaveName(const std::wstring& mediaPath) {
     uint8_t digest[20];
     Sha1(util::Utf8(LowerInvariant(util::FullPath(mediaPath))), digest);
     wchar_t hex[17];
     for (int i = 0; i < 8; i++) swprintf(hex + i * 2, 3, L"%02X", digest[i]);
-    return Combine(Combine(FastCutDir(), L"projects"), std::wstring(hex, 16) + L".llc");
+    return std::wstring(hex, 16) + L".llc";
+}
+}  // namespace
+
+std::wstring AutosavePath(const std::wstring& mediaPath) {
+    return Combine(Combine(util::DataDir(), L"projects"), AutosaveName(mediaPath));
+}
+
+std::wstring LegacyAutosavePath(const std::wstring& mediaPath) {
+    return Combine(Combine(FastCutDir(), L"projects"), AutosaveName(mediaPath));
+}
+
+std::wstring FindAutosave(const std::wstring& mediaPath) {
+    for (const std::wstring& p : {AutosavePath(mediaPath), LegacyAutosavePath(mediaPath)})
+        if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return p;
+    return L"";
 }
 
 // ================================================================ import / export

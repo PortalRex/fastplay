@@ -39,7 +39,7 @@ enum : WORD {
     kExpMeta, kExpChapters, kExpSegChapters, kExpNegTs, kExpFastStart, kExpDiscord, kExpVerify, kExpConfirm,
     kSetDir = 301, kSetBrowse, kSetName, kSetMergeName, kSetSnap, kSetSeekSmall, kSetSeekLarge, kSetFrameJump,
     kSetNudge, kSetThumbs, kSetWave, kSetKeyframes, kSetAutoSave, kSetConfirm, kSetVerify, kSetMeta, kSetChapters,
-    kSetSegChapters, kSetNegTs, kSetFastStart, kSetDiscord,
+    kSetSegChapters, kSetNegTs, kSetFastStart, kSetDiscord, kSetCopyClip,
     kBatSame = 401, kBatSaved, kBatTrim, kBatTrimStart, kBatTrimEnd,
     kPrompt1 = 501, kPrompt2,
     kViewEdit = 601, kViewCopy,
@@ -834,6 +834,7 @@ struct SettingsDlg : Dialog {
         f.Gap(3);
         f.Check(kSetConfirm, L"Show export options before exporting", L"Export");
         f.Check(kSetVerify, L"Check outputs after export (duration, tracks)");
+        f.Check(kSetCopyClip, L"Copy exported files to the clipboard (Ctrl+V attaches them in Discord)");
         f.CheckRow({{kSetMeta, L"Preserve metadata"}, {kSetChapters, L"Preserve chapters"}});
         f.Check(kSetSegChapters, L"Create chapters from segments when merging");
         f.Check(kSetNegTs, L"Shift timestamps to start at zero");
@@ -860,6 +861,7 @@ struct SettingsDlg : Dialog {
         Check(d, kSetAutoSave, s->autoSaveProject);
         Check(d, kSetConfirm, s->confirmExport);
         Check(d, kSetVerify, s->verifyOutputs);
+        Check(d, kSetCopyClip, s->copyToClipboard);
         Check(d, kSetMeta, s->preserveMetadata);
         Check(d, kSetChapters, s->preserveChapters);
         Check(d, kSetSegChapters, s->chaptersFromSegments);
@@ -908,6 +910,7 @@ struct SettingsDlg : Dialog {
         s->autoSaveProject = Checked(d, kSetAutoSave);
         s->confirmExport = Checked(d, kSetConfirm);
         s->verifyOutputs = Checked(d, kSetVerify);
+        s->copyToClipboard = Checked(d, kSetCopyClip);
         s->preserveMetadata = Checked(d, kSetMeta);
         s->preserveChapters = Checked(d, kSetChapters);
         s->chaptersFromSegments = Checked(d, kSetSegChapters);
