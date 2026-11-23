@@ -28,6 +28,11 @@ public:
     double Snap(double t) const;               // keyframe (or bucket) time a hover at t will show
     void Request(double t);                    // decode Snap(t) soon (replaces the previous request)
     std::shared_ptr<const Thumb> Get(double t);// exact match, else the nearest cached one within reach, else null
+    // Edit-mode timeline strip: nearest cached thumbnail within tol seconds of t (no snapping), or null.
+    std::shared_ptr<const Thumb> GetNear(double t, double tol);
+    // Replace the background wish list with these times (snapped to keyframes, nearest to center first).
+    void Want(const std::vector<double>& times, double center);
+    size_t Pending() const;                    // thumbnails still waiting to be decoded
 
 private:
     void Run();

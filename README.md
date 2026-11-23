@@ -1,8 +1,17 @@
 # FastPlay
 
-A small, fast Windows video player built to replace MPC-HC for everyday playback, especially for huge OBS
-recordings (30+ GB, 1 h+, 1440p60). Native Win32 C++ around libmpv: no .NET, no Qt, no scripts. The exe is
-~450 KB; libmpv-2.dll sits next to it.
+A small, fast Windows video player and lossless editor, built to replace MPC-HC for everyday playback and FastCut for
+cutting, especially for huge OBS recordings (30+ GB, 1 h+, 1440p60). Native Win32 C++ around libmpv: no .NET, no Qt,
+no scripts. One ~1.6 MB exe; libmpv-2.dll sits next to it; ffmpeg/ffprobe (on PATH or next to the exe) are only used
+by Edit mode.
+
+Two modes:
+
+- **View mode** (default): a fast MPC-HC-style player. Nothing of Edit mode is created or loaded.
+- **Edit mode** (**E** or **Ctrl+E**, or the *Edit mode* menu item): FastCut's whole editor in the same window and the
+  same libmpv instance: timeline with thumbnails / waveform / keyframes, segments, lossless keyframe / normal / smart
+  cuts, merge, Discord-ready exports, tracks, batch export, merge files, snapshots, detection and segment import/export.
+  **E** again (or *View mode* at the top right) goes back. See [Edit mode](#edit-mode-fastcut-built-in).
 
 ## Why it opens big recordings faster
 
@@ -65,19 +74,63 @@ the pre-warm itself takes as long as the device libmpv would have created.
   Windows' Default apps, where you can make it the default; *Remove file type registration* undoes it.
 - **Help → Keyboard shortcuts** (Ctrl+F1) lists every action with its keys; control-bar buttons have tooltips.
 
-## FastCut
+## Edit mode (FastCut built in)
 
-- **Edit in FastCut** (Ctrl+E): opens the file in [FastCut](https://github.com/PortalRex/fastcut) at the current
-  position, with the A-B loop (if set) as a selected segment (`FastCut.exe <file> --seek=S --segment=A,B`). FastCut is
-  found next to fastplay.exe, in `..\FastCut\`, in a side-by-side `fastcut\dist` checkout, or at `fastcut_path`.
-- **Save clip (lossless)** (Ctrl+Shift+S): writes the A-B range with `ffmpeg -c copy` in the background (ffmpeg from
-  PATH or `ffmpeg_path`). The clip starts on the keyframe at or before A. It uses FastPlay's own keyframe index plus
-  `-copyts` and an output-side cut, so fragmented OBS files skip the slow fragment scan and the clip doesn't start a
-  fragment early (checked: a 10.0 s A-B range gave a 10.1 s clip starting on the keyframe; a partial file is removed
-  on failure or exit). For frame-exact cuts use FastCut.
+A C++ port of [FastCut](https://github.com/PortalRex/fastcut) (C# / WinForms) that lives in `src/edit` and is created
+the first time you press **E**: View mode's start-up, memory and code paths don't change (first frame measured the same
+before and after: 464 / 476 ms median). Entering Edit mode on the 32 GB recording: probe 284 ms, all 1254 keyframes
+17 ms later (from the MP4 header, no packet scan).
 
-FastCut stays its own program: it's a C# editor (timeline, segments, smart cut, export queue), and merging it into
-this C++ player would mean rewriting it. The two hand over to each other instead.
+Layout as in FastCut: menu strip (File / Edit / Playback / View / Tools), video, side panel with **Segments** (cards with
+include checkbox, cut warnings, drag to reorder), **Tracks** (which streams to export, rotation override, stream
+details, extract all) and **Files** (FastPlay's playlist: open, reorder, merge files, export all), the timeline
+(ruler, thumbnail strip, waveform, keyframe marks, segment bars: drag to create, move, resize with Shift snapping to
+keyframes, wheel zoom, middle/Alt drag pan), the transport row (`[` start box, transport, time box, volume, end box
+`]`) and the export bar (tracks, loading progress, status, progress + cancel, Discord toggle and size limit, format,
+cut mode, separate/merge, Export).
+
+Everything FastCut does, with FastCut's default keys (F1 in Edit mode lists them; keys that Edit mode doesn't bind fall
+back to View mode's MPC-HC keys; remap in `fastplay.ini` `[edit_keys]`):
+
+- **Segments**: I / O set start / end, + add at playhead, S split, Ctrl+D duplicate, Delete, nudge start/end
+  (Alt+Left/Right, Alt+Shift+Left/Right), PageUp/PageDown select, F2 label, Enter edit, X include/exclude, Ctrl+A /
+  Ctrl+Shift+A include/exclude all, Y invert, Shift+S snap starts to keyframes, Ctrl+Up/Down reorder, sort, divide
+  the timeline (N parts or a length), shift all, segments from chapters, Ctrl+Z / Ctrl+Y undo/redo (200 steps).
+- **Playback/navigation**: Space, K, J / L slower/faster, 1-4 speeds, P play segment, Ctrl+L loop segment, , / . frame
+  step (mouse back/forward too), Shift+, / Shift+. N frames, Left/Right and Shift+Left/Right seek, Ctrl+Left/Right
+  keyframes, Up/Down cut points, Home/End, Ctrl+G time box.
+- **Export** (Ctrl+E, Ctrl+Shift+E selected only): separate files or merged (with chapters from segments), keyframe
+  cut / normal cut / smart cut (re-encodes only up to the first keyframe, NVENC with CPU fallback), formats, name
+  templates, output folder, speed (FPS) change, rotation override, metadata/chapters, fast start, **Discord-ready**
+  (H.264 stays lossless; HEVC/AV1/10-bit re-encoded to H.264, fitted under 10 / 50 / 500 MB or a custom limit),
+  output verification, and the one-time "export to an SSD instead" tip when source and output share a hard disk.
+- **Tools**: full-resolution snapshot (C), snapshots at segment starts or every N s, extract all tracks, merge files
+  (lossless when they match, re-encoded otherwise), download URL / HLS, detect black / silence / scene changes, stream
+  details, FFmpeg log (F12).
+- **Projects**: segments auto-save per file in the **same place and format as FastCut** (`%APPDATA%\FastCut\projects`,
+  same file names), so both programs see each other's segments; Ctrl+S saves `<name>-proj.llc` next to the file;
+  load `.llc` (also by dropping it); import / export segments as CSV, YouTube chapters, CUE, SRT, MPlayer EDL,
+  FFmpeg metadata, LosslessCut projects.
+- **Batch export** (Files tab): every file with the current segments, each file's saved segments, or a start/end trim.
+
+Faster than FastCut where it matters for big recordings:
+
+- Every ffmpeg / ffprobe call on an OBS fragmented MP4 gets `-use_mfra_for pts` (and ffconcat lists get the same per
+  file), so nothing ever reads all 1254 fragment headers; durations and keyframes come from FastPlay's header index.
+- Timeline thumbnails come from FastPlay's keyframe decoder (hidden libmpv, keyframes only) instead of one ffmpeg per
+  thumbnail.
+- The waveform reads the whole file, so it loads automatically only for files under 2 GB or on an SSD; for a big file
+  on a hard disk the status bar says so and *View > Show waveform* loads it on request.
+- Leaving Edit mode releases the thumbnail decoder (working set 309 → 268 MB on the 32 GB file; View mode alone ~185 MB).
+
+Also kept from the previous version: **Save clip (lossless)** (Ctrl+Shift+S) in View mode writes the A-B loop range
+with `ffmpeg -c copy`, starting on the keyframe at or before A; and *Open in FastCut* (Tools menu) still hands the file
+to the separate FastCut app if you prefer it.
+
+Tested in the running app (off-screen, driven by `fpctl` commands) on the 32 GB recording: I/O marking, undo/redo,
+include toggling, keyframe export (2 files), smart-cut merge, Discord ≤ 10 MB merge (8.6 MB, 720p H.264), all
+"checked OK" by the output verification. The ported modules have their own tests in `tools\edit-tests` (core 80/80
+checks, exporter all modes incl. the 32 GB file, timeline/cards render checks, dialogs OK-handler checks).
 
 ## Default keys (MPC-HC)
 
@@ -90,7 +143,7 @@ this C++ player would mean rewriting it. The two hand over to each other instead
 | Ctrl+Up / Ctrl+Down / Ctrl+R | Faster / slower / normal speed | Num+ / Num- | Audio delay ±10 ms |
 | Ctrl+7 | Playlist | Ctrl+U | Open URL |
 | Alt+Num6 / Alt+Num4 | Rotate | Ctrl+Shift+D | Deinterlace |
-| Ctrl+E | Edit in FastCut | Ctrl+Shift+S | Save A-B clip (lossless) |
+| E, Ctrl+E | Edit mode | Ctrl+Shift+S | Save A-B clip (lossless) |
 | Ctrl+F1 | Shortcut list | | |
 | F2 / F1 | Subtitle delay ± | PageDown / PageUp | Next / previous chapter (or file) |
 | Ctrl+PageDown / Ctrl+PageUp | Next / previous file | Ctrl+O | Open |
@@ -145,6 +198,11 @@ fullscreen, tray · `controls.cpp` owner-drawn control bar and thumbnail popup �
 (ported from FastCut's `Mp4Index.cs`, extended for fragmented MP4) · `thumbs.cpp` thumbnail decoder · `keys.cpp`
 actions and MPC-HC default bindings · `settings.cpp` ini, settings, resume store · `features.cpp` playlist,
 after playback, video/audio extras, taskbar, file types, FastCut and clip export, help · `dialogs.cpp` small dialogs.
+`src/edit/` (Edit mode): `editor.cpp` layout, loading, jobs · `editactions.cpp` actions, keys, menus, segments, export
+ and tools · `panel.cpp` flat buttons/strips · `timeline.cpp`, `segcards.cpp` (+ `uicanvas.h`) the two big controls ·
+`exporter.cpp` all cut modes, Discord, merge, verify, tools · `media.cpp` probe, keyframes, waveform · `ffrun.cpp`
+process runner (job objects, cancellation) · `segio.cpp` projects, import/export, JSON5 · `eddialogs.cpp` dialogs ·
+`common.cpp` settings and helpers.
 
 ## Testing and scripting
 
@@ -156,6 +214,10 @@ after playback, video/audio extras, taskbar, file types, FastCut and clip export
   input; `get`/`state` write to the `FASTPLAY_TIMING` log). `-Shot <png> [-Class <window class>]` saves a PrintWindow
   image. `tools\run-test.ps1` and `tools\seektest.ps1` use it. `FASTPLAY_INSTANCE=<name>` gives a test run its own
   single-instance name (used to benchmark the warm tray instance).
+- Edit mode in tests: `edit <action id>` runs an Edit-mode action, `editset cut_mode|merge|size_mb|discord|format
+  <value>` changes export options, `editstate` logs the segments and status. In test mode jobs write only to
+  `FASTPLAY_EDIT_OUT` (else FastPlay's cache folder), confirmation dialogs are skipped and message boxes are logged.
+- `tools\edit-tests\build-*.cmd`: console/off-screen tests for the Edit-mode modules (core, export, ui, dialogs).
 - `tools\bench\fpbench.exe`: player-agnostic time-to-first-frame (below). `--grab <pid> <class> <out.bmp>` saves a
   Windows.Graphics.Capture still of a window, off-screen ones included.
 

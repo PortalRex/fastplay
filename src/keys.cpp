@@ -91,9 +91,10 @@ static const ActionInfo kActions[] = {
     {Act::SubPosUp, L"subtitle_up", L"Subtitles up", L""},
     {Act::SubPosDown, L"subtitle_down", L"Subtitles down", L""},
     {Act::RepeatFile, L"repeat_file", L"Repeat file", L""},
-    {Act::OpenInFastCut, L"open_in_fastcut", L"Edit in FastCut", L"Ctrl+E"},
+    {Act::OpenInFastCut, L"open_in_fastcut", L"Open in FastCut (separate app)", L""},
     {Act::SaveClip, L"save_clip", L"Save clip (lossless)...", L"Ctrl+Shift+S"},
     {Act::Help, L"help", L"Keyboard shortcuts", L"Ctrl+F1"},
+    {Act::EditMode, L"edit_mode", L"Edit mode (cut and export)", L"E, Ctrl+E"},
 };
 
 const ActionInfo* Actions(int* count) {

@@ -10,6 +10,7 @@ struct MediaIndex {
     bool fragmented = false;
     std::vector<double> keyTimes;    // keyframe presentation times in seconds, ascending
     std::vector<uint64_t> keyOffsets;// file offset of each keyframe's fragment (fragmented only)
+    std::vector<double> keyLags;     // parallel to keyTimes: seconds the keyframe's dts precedes its pts (-1 unknown)
 };
 
 // Reads header boxes only. allowFragmentScan: when a fragmented file has no mfra, walk every moof

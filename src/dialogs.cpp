@@ -178,3 +178,22 @@ void ShowTextBox(HWND owner, const wchar_t* title, const std::wstring& text) {
     }
     DialogBoxIndirectParamW(GetModuleHandleW(nullptr), b.Get(), owner, TextProc, (LPARAM)crlf.c_str());
 }
+
+std::wstring PickFile(HWND owner, bool save, const std::wstring& initialDir, const std::wstring& name, const wchar_t* filter,
+                      const wchar_t* defExt, int* filterIndex) {
+    wchar_t file[MAX_PATH * 4] = {};
+    wcsncpy_s(file, name.c_str(), _TRUNCATE);
+    OPENFILENAMEW o = {sizeof o};
+    o.hwndOwner = owner;
+    o.lpstrFilter = filter;
+    o.nFilterIndex = filterIndex ? *filterIndex : 1;
+    o.lpstrFile = file;
+    o.nMaxFile = (DWORD)std::size(file);
+    o.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
+    o.lpstrDefExt = defExt;
+    o.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST | (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    BOOL ok = save ? GetSaveFileNameW(&o) : GetOpenFileNameW(&o);
+    if (!ok) return L"";
+    if (filterIndex) *filterIndex = (int)o.nFilterIndex;
+    return file;
+}

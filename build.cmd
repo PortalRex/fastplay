@@ -12,7 +12,7 @@ if not exist dist mkdir dist
 
 set CFLAGS=/nologo /utf-8 /O2 /GL /MT /EHsc /std:c++17 /permissive- /W3 /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /Ithird_party\mpv\include /Fobuild\ /Fdbuild\
 rc /nologo /fo build\fastplay.res res\fastplay.rc || exit /b 1
-cl %CFLAGS% src\*.cpp build\fastplay.res /Fe:dist\fastplay.exe /link /LTCG /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF ^
+cl %CFLAGS% src\*.cpp src\edit\*.cpp build\fastplay.res /Fe:dist\fastplay.exe /link /LTCG /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF ^
   user32.lib gdi32.lib shell32.lib comdlg32.lib advapi32.lib ole32.lib comctl32.lib delayimp.lib ^
   /DELAYLOAD:shell32.dll /DELAYLOAD:comdlg32.dll /DELAYLOAD:ole32.dll /DELAYLOAD:comctl32.dll || exit /b 1
 

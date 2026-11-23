@@ -11,3 +11,6 @@ std::vector<std::wstring> PickOpenFiles(HWND owner, const std::wstring& initialD
 void ShowTextBox(HWND owner, const wchar_t* title, const std::wstring& text);
 std::wstring PickSaveFile(HWND owner, const std::wstring& initialDir, const std::wstring& name, const wchar_t* filter,
                           const wchar_t* defExt);
+// General picker: any filter (double-NUL list); filterIndex in/out is 1-based like OPENFILENAME.
+std::wstring PickFile(HWND owner, bool save, const std::wstring& initialDir, const std::wstring& name, const wchar_t* filter,
+                      const wchar_t* defExt, int* filterIndex = nullptr);

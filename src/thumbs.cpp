@@ -92,6 +92,45 @@ std::shared_ptr<const Thumb> Thumbnailer::Get(double t) {
     return best;
 }
 
+std::shared_ptr<const Thumb> Thumbnailer::GetNear(double t, double tol) {
+    std::lock_guard<std::mutex> l(mu_);
+    auto lo = cache_.lower_bound(Key(t));
+    std::shared_ptr<const Thumb> best;
+    double bestD = tol;
+    auto consider = [&](std::map<int64_t, Slot>::iterator it) {
+        double d = std::abs(it->second.t->time - t);
+        if (d <= bestD) {
+            bestD = d;
+            best = it->second.t;
+            it->second.used = ++tick_;
+        }
+    };
+    if (lo != cache_.end()) consider(lo);
+    if (lo != cache_.begin()) consider(std::prev(lo));
+    return best;
+}
+
+void Thumbnailer::Want(const std::vector<double>& times, double center) {
+    std::vector<double> snapped;
+    for (double t : times) snapped.push_back(Snap(t));
+    std::sort(snapped.begin(), snapped.end());
+    snapped.erase(std::unique(snapped.begin(), snapped.end()), snapped.end());
+    std::sort(snapped.begin(), snapped.end(), [center](double a, double b) { return std::abs(a - center) > std::abs(b - center); });
+    {
+        std::lock_guard<std::mutex> l(mu_);
+        prefill_.clear();
+        wantPrefill_ = false;
+        for (double t : snapped)  // pop_back order: nearest to center first
+            if (!cache_.count(Key(t))) prefill_.push_back(t);
+    }
+    cv_.notify_all();
+}
+
+size_t Thumbnailer::Pending() const {
+    std::lock_guard<std::mutex> l(mu_);
+    return prefill_.size() + (request_ >= 0 ? 1 : 0);
+}
+
 static void OnRenderUpdate(void* ev) { SetEvent((HANDLE)ev); }
 
 void Thumbnailer::Run() {

@@ -25,6 +25,7 @@ enum class Act : int {
     Playlist, OpenUrl, AspectNext, RotateCW, RotateCCW, FlipH, FlipV, Deinterlace,
     BrightnessUp, BrightnessDown, ContrastUp, ContrastDown, SaturationUp, SaturationDown, ColorReset,
     Normalize, SubSizeUp, SubSizeDown, SubPosUp, SubPosDown, RepeatFile, OpenInFastCut, SaveClip, Help,
+    EditMode,
     Count
 };
 

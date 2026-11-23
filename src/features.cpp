@@ -3,6 +3,7 @@
 #include "app.h"
 #include "controls.h"
 #include "dialogs.h"
+#include "edit/editor.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlobj.h>
@@ -98,8 +99,17 @@ HICON MakeGlyph(int kind, int size) {
 
 void App::OpenFiles(const std::vector<std::wstring>& files, bool append) {
     std::vector<std::wstring> full;
-    for (const auto& f : files)
-        if (!f.empty()) full.push_back(f.find(L"://") != std::wstring::npos ? f : util::FullPath(f));
+    for (const auto& f : files) {
+        if (f.empty()) continue;
+        std::wstring p = f.find(L"://") != std::wstring::npos ? f : util::FullPath(f);
+        if (util::Lower(p).size() > 4 && util::Lower(p).compare(p.size() - 4, 4, L".llc") == 0) {
+            // A LosslessCut / FastCut project: Edit mode opens its media and applies the segments.
+            if (!editor_) editor_ = new edit::Editor(this);
+            editor_->LoadProjectFile(p);
+            continue;
+        }
+        full.push_back(p);
+    }
     if (full.empty()) return;
     if (append && !plist_.empty()) {
         plist_.insert(plist_.end(), full.begin(), full.end());
@@ -314,7 +324,7 @@ void App::InitTaskbar() {
 }
 
 void App::UpdateTaskbar(bool force) {
-    if (!taskbar_) return;
+    if (!taskbar_ || (editor_ && editor_->JobRunning())) return;  // an edit job owns the taskbar progress
     DWORD now = GetTickCount();
     if (!force && now - lastTaskbarTick_ < 500) return;
     lastTaskbarTick_ = now;

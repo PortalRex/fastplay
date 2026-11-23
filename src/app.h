@@ -50,8 +50,11 @@ struct BarState {
 
 class ControlBar;
 class ThumbPopup;
+namespace edit { class Editor; }
 
 class App {
+    friend class edit::Editor;  // Edit mode drives the player directly
+
 public:
     int Run(HINSTANCE inst, const std::vector<std::wstring>& args);
 
@@ -244,6 +247,14 @@ private:
     HANDLE clipProcess_ = nullptr;
     std::wstring clipOut_;
     bool clipBusy_ = false;
+
+    // Edit mode (src/edit), created the first time it is used
+    edit::Editor* editor_ = nullptr;
+    bool EditActive() const;
+    void ToggleEditMode();
+
+public:
+    bool PreTranslateKey(MSG& msg);  // keys typed in edit-mode panels go to the actions
 };
 
 extern App* g_app;

@@ -2,6 +2,7 @@
 #include "app.h"
 #include "controls.h"
 #include "dialogs.h"
+#include "edit/editor.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <algorithm>
@@ -203,6 +204,13 @@ void App::CreateWindows(bool startHidden) {
 void App::Layout() {
     RECT rc;
     GetClientRect(hwnd_, &rc);
+    if (EditActive()) {
+        // Edit mode lays out the video and its own panels; FastPlay's control bar steps aside.
+        if (!barWnd_->Overlay()) ShowWindow(barWnd_->Hwnd(), SW_HIDE);
+        editor_->Layout(rc);
+        return;
+    }
+    if (editor_) editor_->Layout(rc);  // hides the edit windows
     int barH = (controlsOn_ && !fullscreen_) ? BarHeight() : 0;
     MoveWindow(video_, 0, 0, rc.right, std::max(0L, rc.bottom - barH), TRUE);
     if (!barWnd_->Overlay()) {
@@ -468,6 +476,12 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     switch (m) {
+    case edit::WM_APP_EDIT_LOADED:
+    case edit::WM_APP_EDIT_KEYFRAMES:
+    case edit::WM_APP_EDIT_JOBDONE:
+    case edit::WM_APP_EDIT_UI:
+        if (editor_) editor_->OnAppMessage(m, w, l);
+        return 0;
     case WM_APP_CLIP_DONE:
         OnClipDone(w != 0, (std::wstring*)l);
         return 0;
@@ -511,6 +525,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         }
         return 0;
     case WM_TIMER:
+        if (editor_ && editor_->OnAppMessage(m, w, l)) return 0;
         switch (w) {
         case kTimerUi:
             if (mpv_ && bar_.hasFile && IsWindowVisible(hwnd_) && !IsIconic(hwnd_)) {
@@ -557,6 +572,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         RECT* r = (RECT*)l;
         SetWindowPos(hwnd_, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
         barWnd_->OnDpi(dpi_);
+        if (editor_) editor_->OnDpi(dpi_);
         Layout();
         return 0;
     }
@@ -587,6 +603,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         uint32_t vk = (uint32_t)w;
         if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU) break;
         bool repeat = (l & (1 << 30)) != 0;
+        if (EditActive() && editor_->HandleChord(CurrentMods() | vk, repeat)) return 0;  // FastCut's keys first
         Act a = keys_.Lookup(CurrentMods() | vk);
         if (a != Act::None) {
             if (!repeat || IsRepeatable(a)) DoAction(a);
@@ -683,6 +700,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         if (w) ReloadSettingsIfChanged();
         break;
     case WM_CLOSE:
+        if (editor_ && !editor_->ConfirmQuit()) return 0;
         if (s_.tray && !quitting_ && (!util::TestMode() || !util::InstanceSuffix().empty())) HideToTray();
         else Quit();
         return 0;
@@ -859,6 +877,15 @@ void App::RunCommand(const std::wstring& cmd) {
         Open(arg);
     } else if (verb == L"clip") {
         if (!FindFfmpeg().empty() && bar_.abA >= 0 && bar_.abB > bar_.abA) StartClip(arg, FindFfmpeg());
+    } else if (verb == L"edit") {
+        if (!editor_) editor_ = new edit::Editor(this);
+        util::TimingLog(("command: edit " + util::Utf8(arg)).c_str());
+        editor_->RunAction(arg);
+    } else if (verb == L"editset" && editor_) {
+        size_t sp2 = arg.find(L' ');
+        editor_->SetOption(arg.substr(0, sp2), sp2 == std::wstring::npos ? L"" : arg.substr(sp2 + 1));
+    } else if (verb == L"editstate") {
+        util::TimingLog(editor_ ? util::Utf8(editor_->DebugState()).c_str() : "edit: none");
     } else if (verb == L"menu") {
         OnMenuCommand((UINT)_wtoi(arg.c_str()));
     } else if (verb == L"get") {
@@ -1014,6 +1041,7 @@ void App::DoAction(Act a) {
         ShowContextMenu(p);
         break;
     }
+    case Act::EditMode: ToggleEditMode(); break;
     default: ExtraAction(a); break;
     }
 }
@@ -1136,6 +1164,10 @@ void App::BuildMenu(HMENU m) {
 
 void App::ShowContextMenu(POINT screen) {
     HMENU m = CreatePopupMenu();
+    if (EditActive()) {
+        editor_->AppendMenuItems(m);
+        AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    }
     BuildMenu(m);
     thumbWnd_->Hide();
     UINT id = TrackPopupMenuEx(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, hwnd_, nullptr);
@@ -1144,6 +1176,7 @@ void App::ShowContextMenu(POINT screen) {
 }
 
 void App::OnMenuCommand(UINT id) {
+    if (editor_ && editor_->RunMenuId(id)) return;
     if (ExtraMenuCommand(id)) return;
     if (id >= kCmdAction && id < kCmdAction + (UINT)Act::Count) {
         DoAction((Act)(id - kCmdAction));
@@ -1254,9 +1287,42 @@ void App::ApplyLiveSettings() {
     mpvx::SetStr(mpv_, "hwdec", hw.c_str());
 }
 
+bool App::EditActive() const { return editor_ && editor_->Active(); }
+
+void App::ToggleEditMode() {
+    if (!editor_) editor_ = new edit::Editor(this);  // first use: nothing of Edit mode exists before this
+    if (editor_->Active()) editor_->Leave();
+    else {
+        if (fullscreen_) SetFullscreen(false);
+        editor_->Enter();
+    }
+    RefreshBar();
+}
+
+bool App::PreTranslateKey(MSG& msg) {
+    // Keys typed while an edit-mode panel (timeline, lists, buttons) has focus run the actions, like FastCut's
+    // KeyPreview. Text boxes and drop-downs keep their keys.
+    if (msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN) return false;
+    if (!EditActive() || msg.hwnd == hwnd_ || !IsChild(hwnd_, msg.hwnd)) return false;
+    wchar_t cls[32];
+    GetClassNameW(msg.hwnd, cls, 32);
+    if (!_wcsicmp(cls, L"Edit") || !_wcsicmp(cls, L"ComboBox")) return false;
+    uint32_t vk = (uint32_t)msg.wParam;
+    if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU) return false;
+    if (editor_->HandleChord(CurrentMods() | vk, (msg.lParam & (1 << 30)) != 0)) return true;
+    Act a = keys_.Lookup(CurrentMods() | vk);
+    if (a == Act::None) return false;
+    DoAction(a);
+    return true;
+}
+
 void App::Quit() {
     if (quitting_) return;
     quitting_ = true;
+    if (editor_) {
+        if (editor_->Active()) editor_->Leave();
+        editor_->Shutdown();
+    }
     if (fullscreen_) SetFullscreen(false);
     SaveResume();
     ShowWindow(hwnd_, SW_HIDE);  // feels instant; libmpv teardown happens behind it
@@ -1303,4 +1369,6 @@ void App::Quit() {
     if (plWnd_) DestroyWindow(plWnd_);
     RemoveTray();
     DestroyWindow(hwnd_);
+    delete editor_;
+    editor_ = nullptr;
 }

@@ -1,6 +1,7 @@
 // Start-up path, libmpv set-up, file loading and mpv events. Window/input code is in window.cpp.
 #include "app.h"
 #include "controls.h"
+#include "edit/editor.h"
 #include <algorithm>
 
 App* g_app = nullptr;
@@ -77,6 +78,7 @@ int App::Run(HINSTANCE inst, const std::vector<std::wstring>& args) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (PreTranslateKey(msg)) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
@@ -243,6 +245,7 @@ double App::PrepareOpen(const std::wstring& path) {
     }
     if (!util::TestMode()) resume_.Put(path, fileSize_, fileMtime_, start);  // shows up in Recent right away
     StartPrefetch(path, start, loadSerial_);
+    if (EditActive()) editor_->OnFileOpened(path);
     if (hwnd_) {
         UpdateTitle();
         RefreshBar();
@@ -280,6 +283,7 @@ void App::Open(const std::wstring& rawPath) {
         return;
     }
     IssueLoad(mpv_, path, start);
+    if (EditActive()) mpvx::SetFlag(mpv_, "pause", true);  // Edit mode opens files paused, like FastCut
 }
 
 void App::SaveResume() {
@@ -296,6 +300,7 @@ void App::SaveResume() {
 }
 
 void App::CloseFile() {
+    if (EditActive()) editor_->OnFileClosed();
     SaveResume();
     RetireThumbnails();
     mpvx::Cmd(mpv_, {"stop"});
@@ -408,7 +413,7 @@ void App::OnIndex(void* raw, unsigned serial) {
         // Size the window from the header before libmpv has decoded anything.
         vidW_ = index_.width;
         vidH_ = index_.height;
-        if (fitPending_ && s_.autofit) ResizeToVideo(0, true);
+        if (fitPending_ && s_.autofit && !EditActive()) ResizeToVideo(0, true);
     }
     if (thumbs_) thumbs_->SetKeyTimes(index_.keyTimes);
 }
@@ -510,7 +515,7 @@ void App::OnProperty(mpv_event_property* p) {
         if (!strcmp(p->name, "dwidth")) vidW_ = v ? v : vidW_;
         else vidH_ = v ? v : vidH_;
         if (fitPending_ && vidW_ > 0 && vidH_ > 0 && mpvx::GetInt(mpv_, "dwidth", 0) > 0) {
-            if (s_.autofit) ResizeToVideo(0, true);
+            if (s_.autofit && !EditActive()) ResizeToVideo(0, true);
             fitPending_ = false;
         }
     } else if (!strcmp(p->name, "idle-active")) {
@@ -531,7 +536,8 @@ void App::OnProperty(mpv_event_property* p) {
 }
 
 void App::UpdateTitle() {
-    std::wstring t = path_.empty() ? L"FastPlay" : util::FileName(path_) + L" - FastPlay";
+    std::wstring app = EditActive() ? L"FastPlay (Edit)" : L"FastPlay";
+    std::wstring t = path_.empty() ? app : util::FileName(path_) + L" - " + app;
     SetWindowTextW(hwnd_, t.c_str());
 }
 

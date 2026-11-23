@@ -156,6 +156,10 @@ void ReadSampleTables(const Buf& b, const Track& t, MediaIndex* out) {
     }
     uint32_t sttsRuns = (uint32_t)std::min<uint64_t>(Be32(&b[stts.body + 4]), (stts.end - stts.body - 8) / 8);
     uint32_t cttsRuns = hasCtts ? (uint32_t)std::min<uint64_t>(Be32(&b[ctts.body + 4]), (ctts.end - ctts.body - 8) / 8) : 0;
+    // FFmpeg shifts dts back so that pts >= dts; the most negative composition offset is that shift.
+    int64_t minOff = 0;
+    for (uint32_t i = 0; i < cttsRuns; i++) minOff = std::min<int64_t>(minOff, (int32_t)Be32(&b[ctts.body + 12 + i * 8]));
+    const int64_t dtsShift = -minOff;
     uint32_t sIdx = 0, cIdx = 0, sLeft = 0, sDelta = 0, cLeft = 0;
     int64_t cOff = 0;
     auto nextStts = [&] {
@@ -180,6 +184,7 @@ void ReadSampleTables(const Buf& b, const Track& t, MediaIndex* out) {
         if (!hasStss || (next < sync.size() && sync[next] == sample)) {
             next++;
             out->keyTimes.push_back(ToSeconds(t, dts + cOff));
+            out->keyLags.push_back((double)(cOff + dtsShift) / t.scale);
             if (hasStss && next >= sync.size()) break;
         }
         dts += sDelta;
@@ -214,6 +219,7 @@ bool ReadMfra(const File& f, const Track& t, MediaIndex* out) {
             uint64_t off = v1 ? Be64(&b[p + 8]) : Be32(&b[p + 4]);
             out->keyTimes.push_back(FragSeconds(t, (int64_t)time));
             out->keyOffsets.push_back(off);
+            out->keyLags.push_back(-1);
         }
         got = true;
         return false;
@@ -281,6 +287,7 @@ void ScanFragments(const File& f, uint64_t pos, const Track& t, MediaIndex* out)
                 uint64_t time = b[tfdt.body] == 1 ? Be64(&b[tfdt.body + 4]) : Be32(&b[tfdt.body + 4]);
                 out->keyTimes.push_back(FragSeconds(t, (int64_t)time));
                 out->keyOffsets.push_back(pos);
+                out->keyLags.push_back(-1);
                 return false;
             });
         }
@@ -363,19 +370,21 @@ bool ReadMediaIndex(const std::wstring& path, MediaIndex* out, bool allowFragmen
     }
     if (out->duration <= 0 && movieDur) out->duration = (double)movieDur / movieScale;
 
-    // Keyframes can be listed out of display order in exotic files; keep times (and offsets) ascending.
+    // Keyframes can be listed out of display order in exotic files; keep times (and offsets, lags) ascending.
     if (!std::is_sorted(out->keyTimes.begin(), out->keyTimes.end())) {
         std::vector<size_t> order(out->keyTimes.size());
         std::iota(order.begin(), order.end(), 0);
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return out->keyTimes[a] < out->keyTimes[b]; });
-        std::vector<double> times;
+        std::vector<double> times, lags;
         std::vector<uint64_t> offs;
         for (size_t i : order) {
             times.push_back(out->keyTimes[i]);
             if (!out->keyOffsets.empty()) offs.push_back(out->keyOffsets[i]);
+            if (!out->keyLags.empty()) lags.push_back(out->keyLags[i]);
         }
         out->keyTimes.swap(times);
         out->keyOffsets.swap(offs);
+        out->keyLags.swap(lags);
     }
     return true;
 }
