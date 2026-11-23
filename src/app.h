@@ -19,6 +19,7 @@ enum : UINT {
     WM_APP_TRAY,               // tray icon callback
     WM_APP_DISABLE_CHILD,      // mpv created its video window: make it mouse-transparent
     WM_APP_CLIP_DONE,          // lossless clip export finished (wParam = ok, lParam = std::wstring* message)
+    WM_APP_RECYCLED,           // a file went to the Recycle Bin (wParam = ok, lParam = std::wstring* name)
 };
 
 // Menu / taskbar command ids shared by window.cpp and features.cpp.
@@ -46,6 +47,12 @@ struct BarState {
     double pos = 0, dur = 0, speed = 1, abA = -1, abB = -1;
     int volume = 100, volumeMax = 100;
     std::vector<double> chapters;
+    bool operator==(const BarState& o) const {
+        return hasFile == o.hasFile && paused == o.paused && mute == o.mute && remaining == o.remaining && pos == o.pos &&
+               dur == o.dur && speed == o.speed && abA == o.abA && abB == o.abB && volume == o.volume &&
+               volumeMax == o.volumeMax && chapters == o.chapters;
+    }
+    bool operator!=(const BarState& o) const { return !(*this == o); }
 };
 
 class ControlBar;
@@ -93,6 +100,8 @@ private:
     void SaveResume();
     void CloseFile();
     void StepFile(int dir);
+    void RecycleCurrent();
+    void ZoomAutofitLarger();
     void StartPrefetch(const std::wstring& path, double start, unsigned serial);
     void OnIndex(void* msg, unsigned serial);
     void StartThumbnails();
@@ -103,6 +112,7 @@ private:
     void OnProperty(mpv_event_property* p);
     void UpdateTitle();
     void RefreshBar();
+    void UpdateDurationObserver();
 
     // Window
     void Layout();
@@ -193,6 +203,7 @@ private:
     bool fitPending_ = false;
     MediaIndex index_;
     bool indexReady_ = false;
+    bool durationObserved_ = true;  // see UpdateDurationObserver
     std::unique_ptr<Thumbnailer> thumbs_;
     std::vector<std::thread> retiring_;  // thumbnailers shutting down off the UI thread; joined at exit
     bool spinning_ = false;
@@ -211,6 +222,7 @@ private:
     // Window state
     bool fullscreen_ = false, onTop_ = false, captionOn_ = true, controlsOn_ = true;
     WINDOWPLACEMENT savedPlacement_ = {sizeof(WINDOWPLACEMENT)};
+    RECT savedRect_ = {};  // window rect before fullscreen (test copies go back off-screen exactly)
     bool barOverlayShown_ = false;
     DWORD lastMouseMove_ = 0;
     POINT lastMousePt_ = {-1, -1};
@@ -236,10 +248,13 @@ private:
     bool taskbarWanted_ = false, thumbButtons_ = false, comInit_ = false;
     HICON tbIcons_[4] = {};  // prev, play, pause, next
     DWORD lastTaskbarTick_ = 0;
-    int lastTaskbarState_ = -1;
+    int lastTaskbarState_ = -1, lastTaskbarStep_ = -1;
 
     // Video/audio extras
     int aspectIdx_ = 0, rotate_ = 0;
+    double scaleX_ = 1, scaleY_ = 1;  // MPC-HC's "stretch" (Num4/6/8/2): mpv video-scale-x / -y
+    bool osdTime_ = false;
+    double exactSeekAfterOpen_ = -1;  // Reopen: exact seek once the file shows its first frame
     std::vector<std::string> audioDevNames_;
 
     // Lossless clip export (ffmpeg -c copy)

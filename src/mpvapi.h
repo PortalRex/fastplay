@@ -16,6 +16,7 @@
     X(mpv_get_property)               \
     X(mpv_get_property_string)        \
     X(mpv_observe_property)           \
+    X(mpv_unobserve_property)         \
     X(mpv_command)                    \
     X(mpv_command_async)              \
     X(mpv_wait_event)                 \

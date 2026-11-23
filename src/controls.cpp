@@ -265,7 +265,7 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_CAPTURECHANGED:
-        dragging_ = Part::None;
+        if (!util::KeepDragOnCaptureLoss()) dragging_ = Part::None;
         return 0;
     case WM_MOUSEWHEEL:
         app_->DoAction(GET_WHEEL_DELTA_WPARAM(w) > 0 ? Act::VolUp : Act::VolDown);
@@ -335,6 +335,18 @@ std::wstring ControlBar::TipText(int part) {
     case Part::Volume: return L"Volume " + std::to_wstring(app_->Bar().volume) + L"%  (wheel, Up/Down)";
     default: return L"";
     }
+}
+
+bool ControlBar::PosChangesPixels(double a, double b) const {
+    const BarState& s = app_->Bar();
+    if (!hwnd_ || !IsWindowVisible(hwnd_)) return false;
+    if (s.dur > 0) {
+        int l = seek_.left + S(4), r = seek_.right - S(4);
+        auto xAt = [&](double t) { return l + (int)((r - l) * std::clamp(t / s.dur, 0.0, 1.0)); };
+        if (xAt(a) != xAt(b)) return true;
+    }
+    auto text = [&](double t) { return s.remaining ? util::FormatTime(std::max(0.0, s.dur - t)) : util::FormatTime(t); };
+    return text(a) != text(b);
 }
 
 void ControlBar::Paint(HDC dc, const RECT& rc) {

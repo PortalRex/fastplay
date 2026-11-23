@@ -178,6 +178,7 @@ private:
     int dpi_ = 96;
     EditSettings s_;
     WINDOWPLACEMENT viewPlacement_ = {sizeof(WINDOWPLACEMENT)};
+    RECT viewRect_ = {};
     bool restoreViewPlacement_ = false;
 
     // Windows

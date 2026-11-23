@@ -71,6 +71,8 @@ bool IsRepeatable(Act a) {
     case Act::KeyframeBack: case Act::SpeedUp: case Act::SpeedDown: case Act::AudioDelayUp: case Act::AudioDelayDown:
     case Act::SubDelayUp: case Act::SubDelayDown: case Act::PanLeft: case Act::PanRight: case Act::PanUp:
     case Act::PanDown: case Act::ZoomIn: case Act::ZoomOut: case Act::VolUp: case Act::VolDown:
+    case Act::WidthUp: case Act::WidthDown: case Act::HeightUp: case Act::HeightDown: case Act::PanUpLeft:
+    case Act::PanUpRight: case Act::PanDownLeft: case Act::PanDownRight: case Act::SubLinePrev: case Act::SubLineNext:
         return true;
     default:
         return false;
@@ -81,7 +83,7 @@ bool IsRepeatable(Act a) {
 MONITORINFO WindowMonitor(HWND h) {
     MONITORINFO mi = {sizeof mi};
     GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi);
-    if (util::TestMode()) {
+    if (util::TestOffScreen()) {
         int dx = GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN) + 200 - mi.rcMonitor.left;
         OffsetRect(&mi.rcMonitor, dx, 0);
         OffsetRect(&mi.rcWork, dx, 0);
@@ -174,7 +176,7 @@ void App::CreateWindows(bool startHidden) {
     int w = r.right - r.left, h = r.bottom - r.top;
     const RECT& wa = mi.rcWork;
     int x = wa.left + (wa.right - wa.left - w) / 2, y = wa.top + (wa.bottom - wa.top - h) / 2;
-    if (util::TestMode()) {
+    if (util::TestOffScreen()) {
         // Benchmarks/tests: off every screen, never activated.
         x = GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN) + 200;
         y = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -243,6 +245,7 @@ void App::SetFullscreen(bool on) {
     if (on) {
         savedPlacement_.length = sizeof savedPlacement_;
         GetWindowPlacement(hwnd_, &savedPlacement_);
+        GetWindowRect(hwnd_, &savedRect_);
         MONITORINFO mi = WindowMonitor(hwnd_);
         SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
         barWnd_->SetOverlay(true, hwnd_);
@@ -254,9 +257,15 @@ void App::SetFullscreen(bool on) {
         barOverlayShown_ = false;
         barWnd_->SetOverlay(false, hwnd_);
         SetWindowLongPtrW(hwnd_, GWL_STYLE, (captionOn_ ? kWindowedStyle : kBorderlessStyle) | WS_VISIBLE);
-        SetWindowPlacement(hwnd_, &savedPlacement_);
+        WINDOWPLACEMENT wp = savedPlacement_;
+        if (wp.showCmd == SW_SHOWNORMAL) wp.showCmd = SW_SHOWNOACTIVATE;  // already visible: never (re)activate
+        SetWindowPlacement(hwnd_, &wp);
         SetWindowPos(hwnd_, onTop_ ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+        // Windows clamps a restored placement onto a monitor, which put a hidden test copy on the user's screen.
+        if (util::TestOffScreen())
+            SetWindowPos(hwnd_, nullptr, savedRect_.left, savedRect_.top, savedRect_.right - savedRect_.left,
+                         savedRect_.bottom - savedRect_.top, SWP_NOZORDER | SWP_NOACTIVATE);
     }
     thumbWnd_->Hide();
     Layout();
@@ -420,7 +429,7 @@ LRESULT App::OnVideo(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_LBUTTONDOWN:
         NoteMouseActivity();
-        SetFocus(hwnd_);
+        util::FocusIfActive(hwnd_);
         downPt_ = {(short)LOWORD(l), (short)HIWORD(l)};
         clickPending_ = true;
         SetCapture(h);
@@ -485,6 +494,11 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
     case WM_APP_CLIP_DONE:
         OnClipDone(w != 0, (std::wstring*)l);
         return 0;
+    case WM_APP_RECYCLED: {
+        std::unique_ptr<std::wstring> name((std::wstring*)l);
+        mpvx::ShowText(mpv_, (w ? L"Moved to the Recycle Bin: " : L"Could not move to the Recycle Bin: ") + *name, 3000);
+        return 0;
+    }
     case WM_COMMAND:
         if (HIWORD(w) == 0x1800 /* THBN_CLICKED */) ExtraMenuCommand(LOWORD(w));
         return 0;
@@ -530,9 +544,10 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         case kTimerUi:
             if (mpv_ && bar_.hasFile && IsWindowVisible(hwnd_) && !IsIconic(hwnd_)) {
                 double p = mpvx::GetDouble(mpv_, "time-pos", bar_.pos);
-                if (std::abs(p - bar_.pos) > 0.05) {
+                if (p != bar_.pos) {
+                    double was = bar_.pos;
                     bar_.pos = p;
-                    RefreshBar();
+                    if (barWnd_ && barWnd_->PosChangesPixels(was, p)) RefreshBar();
                 }
             }
             UpdateTaskbar(false);
@@ -753,7 +768,16 @@ void App::PanZoom(double dx, double dy, double dz) {
     panX_ += dx;
     panY_ += dy;
     zoom_ += dz;
-    if (dx == 0 && dy == 0 && dz == 0) panX_ = panY_ = zoom_ = 0;
+    if (dx == 0 && dy == 0 && dz == 0) {
+        panX_ = panY_ = zoom_ = 0;
+        scaleX_ = scaleY_ = 1;
+        mpvx::SetDouble(mpv_, "video-scale-x", 1);
+        mpvx::SetDouble(mpv_, "video-scale-y", 1);
+        if (rotate_) {
+            rotate_ = 0;
+            mpvx::SetStr(mpv_, "video-rotate", "0");
+        }
+    }
     mpvx::SetDouble(mpv_, "video-pan-x", panX_);
     mpvx::SetDouble(mpv_, "video-pan-y", panY_);
     mpvx::SetDouble(mpv_, "video-zoom", zoom_);
@@ -891,9 +915,10 @@ void App::RunCommand(const std::wstring& cmd) {
     } else if (verb == L"get") {
         util::TimingLog(("property " + util::Utf8(arg) + " = " + mpvx::GetStr(mpv_, util::Utf8(arg).c_str())).c_str());
     } else if (verb == L"state") {
-        char b[256];
-        snprintf(b, sizeof b, "state: playlist %d/%d, after %d, volume %d/%d, path %s", plPos_, (int)plist_.size(),
-                 s_.afterPlayback, bar_.volume, bar_.volumeMax, util::Utf8(util::FileName(path_)).c_str());
+        char b[512];
+        snprintf(b, sizeof b, "state: playlist %d/%d, after %d, volume %d/%d, duration %.3f, path %s", plPos_,
+                 (int)plist_.size(), s_.afterPlayback, bar_.volume, bar_.volumeMax, bar_.dur,
+                 util::Utf8(util::FileName(path_)).c_str());
         util::TimingLog(b);
     }
 }
@@ -986,6 +1011,7 @@ void App::DoAction(Act a) {
     case Act::ToggleControls: SetControls(!controlsOn_); break;
     case Act::ViewMinimal: SetCaption(false); SetControls(false); break;
     case Act::ViewNormal: SetCaption(true); SetControls(true); break;
+    case Act::ViewCompact: SetCaption(false); SetControls(true); break;
     case Act::Zoom50: ResizeToVideo(0.5, false); break;
     case Act::Zoom100: ResizeToVideo(1, false); break;
     case Act::Zoom200: ResizeToVideo(2, false); break;

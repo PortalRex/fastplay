@@ -26,6 +26,10 @@ enum class Act : int {
     BrightnessUp, BrightnessDown, ContrastUp, ContrastDown, SaturationUp, SaturationDown, ColorReset,
     Normalize, SubSizeUp, SubSizeDown, SubPosUp, SubPosDown, RepeatFile, OpenInFastCut, SaveClip, Help,
     EditMode,
+    // MPC-HC defaults added 2026-11-23
+    Reopen, Recycle, LoadSubtitles, OpenLocation, BossKey, OsdTime, OsdFilename, SubLinePrev, SubLineNext,
+    SubShiftUp, SubShiftDown, Zoom25, ZoomAutofitLarger, WidthUp, WidthDown, HeightUp, HeightDown, PanUpLeft,
+    PanUpRight, PanDownLeft, PanDownRight, PanCenter, ViewCompact,
     Count
 };
 

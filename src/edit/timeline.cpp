@@ -721,7 +721,7 @@ struct Timeline::Impl {
             if (drag != Drag::None && m == dragButton) EndDrag(true);
             return 0;
         case WM_CAPTURECHANGED:
-            if ((HWND)lp != hwnd) EndDrag(false);
+            if ((HWND)lp != hwnd && !util::KeepDragOnCaptureLoss()) EndDrag(false);
             return 0;
         case WM_MOUSELEAVE:
             tracking = false;

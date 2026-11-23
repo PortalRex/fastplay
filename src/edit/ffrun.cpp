@@ -282,6 +282,7 @@ void AddLog(const std::wstring& text) {
         if (text[i] == L'\n' && (i == 0 || text[i - 1] != L'\r')) t += L'\r';
         t += text[i];
     }
+    if (util::TestMode()) util::TimingLog(("fflog: " + util::Utf8(t)).c_str());  // test runs: commands in the log
     Log& log = TheLog();
     std::lock_guard<std::mutex> lock(log.mu);
     log.lines.push_back(std::move(t));

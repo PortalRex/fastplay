@@ -8,7 +8,7 @@ by Edit mode.
 Two modes:
 
 - **View mode** (default): a fast MPC-HC-style player. Nothing of Edit mode is created or loaded.
-- **Edit mode** (**E** or **Ctrl+E**, or the *Edit mode* menu item): FastCut's whole editor in the same window and the
+- **Edit mode** (**E**, or the *Edit mode* menu item): FastCut's whole editor in the same window and the
   same libmpv instance: timeline with thumbnails / waveform / keyframes, segments, lossless keyframe / normal / smart
   cuts, merge, Discord-ready exports, tracks, batch export, merge files, snapshots, detection and segment import/export.
   **E** again (or *View mode* at the top right) goes back. See [Edit mode](#edit-mode-fastcut-built-in).
@@ -51,8 +51,8 @@ the pre-warm itself takes as long as the device libmpv would have created.
 - Fullscreen on double-click / Alt+Enter, wheel volume, mute, next/previous file in the folder (natural sort),
   chapters, screenshot (Alt+I save as, F5 auto), drag and drop, right-click menu, recent files, statistics overlay,
   properties, auto-hiding controls and cursor in fullscreen, hidden cursor over the video after 2 s.
-- Seekbar thumbnails: keyframe times come straight from the MP4 header (regular `stts`/`stss` tables, or the `mfra`
-  of fragmented files), and a second hidden libmpv instance decodes keyframes only, without audio, through the
+- Seekbar thumbnails: keyframe times come straight from the file's own index: the MP4 header (regular `stts`/`stss`
+  tables, or the `mfra` of fragmented files) or the Matroska/WebM `Cues` (found through the SeekHead), and a second hidden libmpv instance decodes keyframes only, without audio, through the
   software render API on a below-normal-priority thread. Hover requests coalesce (only the latest waits). On SSDs it
   also pre-fills 64 evenly spread thumbnails; on spinning disks it only decodes what you hover, so playback isn't
   starved of seeks. At most `thumbnail_cache` (150) thumbnails stay in memory.
@@ -79,7 +79,9 @@ the pre-warm itself takes as long as the device libmpv would have created.
 A C++ port of [FastCut](https://github.com/PortalRex/fastcut) (C# / WinForms) that lives in `src/edit` and is created
 the first time you press **E**: View mode's start-up, memory and code paths don't change (first frame measured the same
 before and after: 464 / 476 ms median). Entering Edit mode on the 32 GB recording: probe 284 ms, all 1254 keyframes
-17 ms later (from the MP4 header, no packet scan).
+17 ms later (from the MP4 header, no packet scan). MKV/WebM read their `Cues` the same way: the 21 GB OBS MKV indexes
+1469 keyframes in 24 ms (identical to ffprobe's packet scan, which took over a minute and made a 5 s export take 74 s;
+now 1.7 s).
 
 Layout as in FastCut: menu strip (File / Edit / Playback / View / Tools), video, side panel with **Segments** (cards with
 include checkbox, cut warnings, drag to reorder), **Tracks** (which streams to export, rotation override, stream
@@ -134,30 +136,47 @@ checks, exporter all modes incl. the 32 GB file, timeline/cards render checks, d
 
 ## Default keys (MPC-HC)
 
+Every default from MPC-HC's built-in table (clsid2/mpc-hc `AppSettings.cpp` and its mouse defaults) for a command
+FastPlay has. The rest are FastPlay's own and use keys MPC-HC leaves free.
+
 | Key | Action | Key | Action |
 |---|---|---|---|
 | Space / click video | Play/Pause | . | Stop |
-| Ctrl+Right / Ctrl+Left | Frame step / back | Right / Left (Mouse X2 / X1) | Jump 5 s |
-| Alt+Right / Alt+Left | Jump 20 s | Shift+Right / Shift+Left | Next / previous keyframe |
+| Ctrl+Right / Ctrl+Left | Frame step / back | Right / Left | Jump 5 s |
+| Ctrl+wheel (Alt+Right / Alt+Left) | Jump 20 s | Shift+Right / Shift+Left | Next / previous keyframe |
 | Home | Go to start | Ctrl+G | Go to... |
 | Ctrl+Up / Ctrl+Down / Ctrl+R | Faster / slower / normal speed | Num+ / Num- | Audio delay ±10 ms |
-| Ctrl+7 | Playlist | Ctrl+U | Open URL |
-| Alt+Num6 / Alt+Num4 | Rotate | Ctrl+Shift+D | Deinterlace |
-| E, Ctrl+E | Edit mode | Ctrl+Shift+S | Save A-B clip (lossless) |
-| Ctrl+F1 | Shortcut list | | |
-| F2 / F1 | Subtitle delay ± | PageDown / PageUp | Next / previous chapter (or file) |
-| Ctrl+PageDown / Ctrl+PageUp | Next / previous file | Ctrl+O | Open |
+| PageDown / PageUp, Mouse X2 / X1 | Next / previous chapter (or file) | Ctrl+PageDown / Ctrl+PageUp | Next / previous file |
+| Ctrl+O, Ctrl+Q | Open | Ctrl+E | Reopen (same position) |
 | Ctrl+C | Close | Alt+X | Exit |
+| Delete | Move file to the Recycle Bin (asks first) | Ctrl+Shift+F10 | Open file location |
+| Ctrl+L | Load subtitles | B | Boss key (pause, minimize) |
 | Alt+Enter, F11, double-click | Fullscreen | Escape | Exit fullscreen |
 | Ctrl+A | Always on top | Ctrl+0 | Hide caption |
-| Ctrl+1 / Ctrl+2 | Show/hide controls | 1 / 3 | Minimal / normal view |
-| Alt+1 / Alt+2 / Alt+3 / Alt+4 | Zoom 50 / 100 / 200 % / auto-fit | Num4/6/8/2, Num5 | Pan, reset |
-| Num9 / Num1, Ctrl+wheel | Video zoom in / out | Up / Down, wheel | Volume |
-| Ctrl+M | Mute | A / Shift+A | Next / previous audio track |
-| S / Shift+S | Next / previous subtitle | W | Subtitles on/off |
+| Ctrl+1 / Ctrl+2 / Ctrl+5 | Show/hide controls | 1 / 2 / 3 | Minimal / compact / normal view |
+| Alt+\` / Alt+1 / Alt+2 / Alt+3 | Zoom 25 / 50 / 100 / 200 % | Alt+4 / Alt+5 | Auto-fit / auto-fit (larger only) |
+| Num9 / Num1 | Video zoom in / out | Num6 / Num4, Num8 / Num2 | Stretch wider / narrower, taller / shorter |
+| Ctrl+Num4/6/8/2, Ctrl+Num7/9/1/3 | Pan, diagonally | Num5 / Ctrl+Num5 | Reset zoom, pan, stretch, rotation / center |
+| Alt+Num1 / Alt+Num3 | Rotate clockwise / counterclockwise | Alt+Num4/6 / Alt+Num8/2 | Mirror / flip |
+| Up / Down, wheel | Volume | Ctrl+M | Mute |
+| A / Shift+A | Next / previous audio track | S / Shift+S | Next / previous subtitle |
+| W | Subtitles on/off | Y / U | Previous / next subtitle line |
+| F2 / F1 | Subtitle delay ± | Alt+PageUp / Alt+PageDown | Shift subtitles to previous / next line |
+| Ctrl+Num+ / Ctrl+Num- | Subtitles bigger / smaller | Ctrl+Shift+Num+ / Ctrl+Shift+Num- | Subtitles up / down |
 | Alt+I | Save image... | F5 | Save image (auto) |
-| [ / ] / \ | A-B loop start / end / clear | Ctrl+4, Tab | Statistics |
+| [ / ] (\\) | A-B loop start / end (clear) | Ctrl+4, Ctrl+J (Tab) | Statistics |
+| Ctrl+I | Keep the time on screen | N | Show the file name |
 | Shift+F10 | Properties | O | Options (opens fastplay.ini) |
+| Apps / right-click | Menu | Ctrl+7 | Playlist |
+| E | Edit mode | Ctrl+Shift+S | Save A-B clip (lossless) |
+| Ctrl+U | Open URL | Ctrl+Shift+D | Deinterlace |
+| Ctrl+F1 | Shortcut list | | |
+
+MPC-HC defaults without a FastPlay command, so not bound: DVD / BD / device opening and DVD menus (Ctrl+D, Ctrl+V,
+Alt+T, Alt+R, Ctrl+Shift+arrows), tuner scan (Shift+T), favorites (Shift+Q), saving and downloading subtitles
+(Ctrl+S, D), the information / subresync / capture / navigation panels (Ctrl+3, Ctrl+6, Ctrl+8, Ctrl+9), shader
+toggles (Ctrl+P, Ctrl+Alt+P) and the MPC renderer's V-sync and statistics keys (V, Ctrl+Alt+V, Ctrl+Alt+Up/Down,
+Ctrl+Alt+R). Every binding can be changed in the `[keys]` section of fastplay.ini.
 
 ## Settings
 
@@ -177,7 +196,7 @@ with every setting and key binding listed. **O** opens it in Notepad; changes ap
 | `seek_small` / `seek_medium` / `seek_large` | 1 / 5 / 20 | Jump sizes in seconds |
 | `speed_step` | 0.25 | 0 = MPC-HC style doubling |
 | `volume`, `volume_step`, `mute` | 100, 5, 0 | |
-| `hwdec`, `vo` | d3d11va, gpu-next | |
+| `hwdec`, `vo` | d3d11va,auto-copy, gpu-next | d3d11va (zero-copy) first, a copy-back hardware decoder when it refuses a stream |
 | `screenshot_dir`, `screenshot_format` | Pictures\FastPlay, png | |
 | `mpv_options` | | Extra mpv options: `name=value;name=value` |
 | `after_playback` | 0 | 0 nothing, 1 next file, 2 repeat, 3 close, 4 exit |
@@ -195,8 +214,8 @@ Needs Visual Studio 2019 or newer (C++ workload) and the Windows 10/11 SDK.
 
 Source map: `app.cpp` start-up, libmpv set-up, loading, events · `window.cpp` window, input, actions, menus,
 fullscreen, tray · `controls.cpp` owner-drawn control bar and thumbnail popup · `mp4index.cpp` MP4 header index
-(ported from FastCut's `Mp4Index.cs`, extended for fragmented MP4) · `thumbs.cpp` thumbnail decoder · `keys.cpp`
-actions and MPC-HC default bindings · `settings.cpp` ini, settings, resume store · `features.cpp` playlist,
+(ported from FastCut's `Mp4Index.cs`, extended for fragmented MP4) · `mkvindex.cpp` Matroska/WebM Cues index ·
+`thumbs.cpp` thumbnail decoder · `keys.cpp` actions and MPC-HC default bindings · `settings.cpp` ini, settings, resume store · `features.cpp` playlist,
 after playback, video/audio extras, taskbar, file types, FastCut and clip export, help · `dialogs.cpp` small dialogs.
 `src/edit/` (Edit mode): `editor.cpp` layout, loading, jobs · `editactions.cpp` actions, keys, menus, segments, export
  and tools · `panel.cpp` flat buttons/strips · `timeline.cpp`, `segcards.cpp` (+ `uicanvas.h`) the two big controls ·
@@ -207,7 +226,7 @@ process runner (job objects, cancellation) · `segio.cpp` projects, import/expor
 ## Testing and scripting
 
 - `FASTPLAY_TEST=1`: the window opens off every screen, muted, never activated, with its own instance and no
-  writes to settings or history. `FASTPLAY_TIMING=<file>` appends start-up milestones (ms since process creation).
+  writes to settings or history. `FASTPLAY_TEST=visible` is the same but on screen, for hand-driven UI tests. `FASTPLAY_TIMING=<file>` appends start-up milestones (ms since process creation).
   `FASTPLAY_MPV_OPTS="name=value;..."` passes extra mpv options. `--start=SECONDS`, `--bench-exit`.
 - `tools\fpctl.ps1 -ProcessId <pid> -Command "action <id>" | "seek <s>" | "hover <s>" | "open <path>" |
   "menu <id>" | "clip <out>" | "get <property>" | "state"` drives a running player over `WM_COPYDATA` (no simulated
@@ -217,6 +236,15 @@ process runner (job objects, cancellation) · `segio.cpp` projects, import/expor
 - Edit mode in tests: `edit <action id>` runs an Edit-mode action, `editset cut_mode|merge|size_mb|discord|format
   <value>` changes export options, `editstate` logs the segments and status. In test mode jobs write only to
   `FASTPLAY_EDIT_OUT` (else FastPlay's cache folder), confirmation dialogs are skipped and message boxes are logged.
+- `tools\media-test.ps1 -Files a.mov,b.mkv`: per file, first frame, libmpv's view against ffprobe (format, codecs,
+  hwdec, length), a seek to the middle, Edit mode (probe + keyframes) and a 5 s keyframe-cut export into `-OutDir`.
+- `tools\ui-mouse-test.ps1 -File <long video>`: 19 click/drag checks (seekbar click and drag, play button, volume
+  slider, click/wheel/double-click on the video, Edit-mode timeline seek, drag-create, move, both edges, undo/redo,
+  selection, wheel zoom, segment cards). It drives a hidden test copy with mouse window messages only
+  (`tools\fpmouse.ps1`, never the real cursor) and kills it if it ever takes the foreground or moves on screen. In
+  test mode a lost mouse capture doesn't cancel a drag, since there is no real button press behind these messages.
+- `tools\bench\fpthreads.exe <pid> [seconds] [--no-samples]`: CPU per thread (names, start module) from cycle
+  counts, plus an instruction-pointer sampling profile. Used for the playback CPU numbers below.
 - `tools\edit-tests\build-*.cmd`: console/off-screen tests for the Edit-mode modules (core, export, ui, dialogs).
 - `tools\bench\fpbench.exe`: player-agnostic time-to-first-frame (below). `--grab <pid> <class> <out.bmp>` saves a
   Windows.Graphics.Capture still of a window, off-screen ones included.
@@ -237,7 +265,7 @@ run as a portable copy. Both players start off-screen, muted, under the same no-
 | **Warm tray instance** (`tray=1`): double-click → handoff → first frame, 32 GB file at 10:00 | **102 ms** median (96-116) | - | |
 | Warm tray instance, never-opened parts at 2:00 | **98, 111 ms** | - | |
 | Window on screen | 30-50 ms | ~500 ms | |
-| Playing (10 s after first frame): CPU, % of one core | 7.0 % | 2.2 % | MPC-HC lower |
+| Playing (steady, 15 s window, thread cycle counts): CPU, % of one core | 6.2 % | 3.8 % | MPC-HC lower |
 | Playing: private / working set | 289 / 180 MB | 310 / 197 MB | |
 | Idle tray instance (`tray=1`, nothing open) | 268 / 125 MB | - | |
 
@@ -249,11 +277,31 @@ Honest notes:
 - FastPlay's cold and warm times are about the same because its open reads only three small regions; what's left
   is per-process start-up: ~25 ms to `main`, libmpv load ~20 ms, and the first D3D11 device ~170-250 ms (NVIDIA
   driver initialisation), then decoder set-up and the first frame. Only the warm tray instance avoids it.
-- **Playback CPU is higher than MPC-HC's** (7-10 % vs 2.2 % of one core, i.e. ~0.5 % vs ~0.15 % of this 16-thread
-  CPU). Measured with each of these and none lowered it: thumbnails off, no audio, `vo=gpu`, `profile=fast`, no
-  deband/dither, smaller or bigger demuxer buffers, a 30 s steady-state window, `d3d11-sync-interval=0`, Vulkan (11 %,
-  and a 2.2 s first frame), NVDEC copy-back (14 %); d3d11va copy-back doubles it (16-20 %). So it's mpv's own
-  playback loop on zero-copy d3d11va, which is already the cheapest path found.
+- **Playback CPU is higher than MPC-HC's**: 6.2 % vs 3.8 % of one core (~0.4 % vs ~0.24 % of this 16-thread CPU),
+  measured 2026-11-23 with `tools\bench\fpthreads.exe` (per-thread cycle counts; the older 7.0 % vs 2.2 % came from
+  whole-process times, which Windows charges in 15.6 ms ticks). Where it goes, per thread:
+
+  | FastPlay (libmpv) | % | MPC-HC | % |
+  |---|---|---|---|
+  | NVIDIA driver worker | 1.9 | NVIDIA driver worker | 1.25 |
+  | mpv `vo` (render + present) | 1.6 | splitter → LAV → renderer delivery | 1.4 |
+  | 4 FFmpeg frame threads (`av:h264:df0-3`) | 1.2 | presenter / other LAV threads | 0.6 |
+  | mpv `core` (playback loop) | 0.75 | MPC-HC UI thread | 0.4 |
+  | mpv `demux` | 0.45 | | |
+  | FastPlay UI thread | 0.1 | | |
+
+  FastPlay's own UI thread used to cost 1-3.75 % on top: in an OBS file opened through its mfra index libmpv's
+  `duration` grows as it reads, ~35 times a second, and every change woke the UI and repainted the control bar,
+  which also repainted on a 10 Hz timer whether or not anything visible moved. Both fixed (duration comes from the
+  header index for those files; the bar repaints only when a pixel changes: ~1 a second).
+  What is left is libmpv's architecture. With d3d11va mpv runs four FFmpeg frame threads (`vd-lavc-threads=1`
+  didn't remove them) and hands every frame across demux → decoder → core → vo threads, where
+  DirectShow pushes each sample through splitter, decoder and renderer on one thread. Options measured: `vo=gpu`
+  5.4 %, `profile=fast` 5.6 %, `d3d11-flip=no` 5.4 %, `vo=gpu` + `d3d11-flip=no` 5.0 %, `gpu-dumb-mode` 6.0 %,
+  `swapchain-depth=1` and `video-sync=desync` no change, `hwdec=nvdec` (zero-copy) is unavailable in this libmpv build
+  and falls back to software decoding (99 %). None is the default: the old renderer and bitblt presentation save ~1 %
+  of one core but cost quality (HDR) and GPU/DWM work.
+  Put them in `mpv_options` in fastplay.ini if you want them.
 - MPC-HC test copies took the foreground at start-up even with `/nofocus` and without inherited foreground rights
   (activating a hidden modeless dialog). fpbench therefore launches every player under a debugger and patches the
   user32/win32u focus and input exports before any player code runs (see `PatchFocusAndDetach`), with

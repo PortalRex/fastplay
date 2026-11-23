@@ -328,7 +328,7 @@ struct SegmentCards::Impl {
             OnUp(wp);
             return 0;
         case WM_CAPTURECHANGED:
-            if ((HWND)lp != hwnd && dragFrom >= 0) {
+            if ((HWND)lp != hwnd && dragFrom >= 0 && !util::KeepDragOnCaptureLoss()) {
                 dragFrom = dropAt = -1;
                 dragging = false;
                 Invalidate();

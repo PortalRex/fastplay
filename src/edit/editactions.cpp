@@ -181,7 +181,7 @@ void Editor::RegisterActions() {
     add(L"home", L"Go to start", [this] { Seek(0); }, L"Home");
     add(L"end", L"Go to end", [this] { Seek(media_ ? media_->duration : 0); }, L"End");
     add(L"gototime", L"Go to time...", [this] {
-        SetFocus(timeBox_);
+        util::FocusIfActive(timeBox_);
         SendMessageW(timeBox_, EM_SETSEL, 0, -1);
     }, L"Ctrl+G");
 
@@ -1304,6 +1304,11 @@ void Editor::ExportSegmentsAs() {
 
 void Editor::Export(bool onlySelected) {
     if (!media_ || jobRunning_) return;
+    for (const auto& st : media_->streams)
+        if (st.keep && st.encrypted) {
+            SetStatus(L"This file is DRM-protected (copy-protected tracks), so it can't be cut or exported.", L"", 3);
+            return;
+        }
     std::vector<Segment> list;
     if (onlySelected) {
         for (int i : Targets())

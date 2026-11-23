@@ -30,7 +30,16 @@ bool ParseTime(const std::wstring& s, double* out);
 // Milliseconds since this process was created (includes loader time before main).
 double MsSinceProcessStart();
 void TimingLog(const char* what);  // appends to FASTPLAY_TIMING file when set
-bool TestMode();                   // FASTPLAY_TEST=1: off-screen, muted, never activates
+bool TestMode();                   // FASTPLAY_TEST=1 or visible: muted, never activates, no settings/history writes
+bool TestOffScreen();              // FASTPLAY_TEST=1: and placed off every screen
+// Test copies are driven with mouse window messages (toolspmouse.ps1), without a real button press, so Windows
+// takes the mouse capture straight back; drags then keep going until the WM_LBUTTONUP the test sends.
+inline bool KeepDragOnCaptureLoss() { return TestMode(); }
+// Keyboard focus to h only when its window is already the active one. SetFocus on an inactive window activates it,
+// which pulls a hidden test copy to the foreground; a real click has activated the window before the handler runs.
+inline void FocusIfActive(HWND h) {
+    if (GetActiveWindow() == GetAncestor(h, GA_ROOT)) SetFocus(h);
+}
 // FASTPLAY_INSTANCE=<name>: separate single-instance namespace (window class + mutex), so a test warm instance
 // never talks to the user's real FastPlay. Empty normally.
 const std::wstring& InstanceSuffix();

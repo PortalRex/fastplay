@@ -25,4 +25,8 @@ if exist tools\bench\fpbench.cpp (
   cl /nologo /O2 /MT /EHsc /std:c++17 /permissive- /W3 /DUNICODE /D_UNICODE /await /Fobuild\ /Fdbuild\ tools\bench\fpbench.cpp ^
     /Fe:tools\bench\fpbench.exe /link d3d11.lib dxgi.lib windowsapp.lib user32.lib ole32.lib || exit /b 1
 )
+if exist tools\bench\fpthreads.cpp (
+  cl /nologo /O2 /MT /EHsc /std:c++17 /W3 /DUNICODE /D_UNICODE /Fobuild\ /Fdbuild\ tools\bench\fpthreads.cpp ^
+    /Fe:tools\bench\fpthreads.exe || exit /b 1
+)
 echo Built dist\fastplay.exe

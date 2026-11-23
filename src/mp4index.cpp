@@ -301,6 +301,8 @@ bool ReadMediaIndex(const std::wstring& path, MediaIndex* out, bool allowFragmen
     *out = MediaIndex{};
     File f(path);
     if (!f.ok()) return false;
+    uint8_t magic[4];
+    if (f.Read(0, magic, 4) && Be32(magic) == 0x1A45DFA3) return ReadMkvIndex(path, out);  // EBML: Matroska/WebM
 
     // Find the top-level moov, seeking past media data.
     uint64_t pos = 0, moovEnd = 0;

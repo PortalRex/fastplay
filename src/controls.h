@@ -16,6 +16,9 @@ public:
     // Becomes a top-level overlay (fullscreen) or a child at the bottom of the window.
     void SetOverlay(bool overlay, HWND owner);
     bool Overlay() const { return overlay_; }
+    // Would moving the playhead from a to b change any pixel (seekbar fill or time text)? Playback ticks repaint only
+    // then (about once a second) instead of on every 100 ms tick.
+    bool PosChangesPixels(double a, double b) const;
     bool MouseInside() const { return hot_ != Part::None || dragging_ != Part::None; }
 
 private:

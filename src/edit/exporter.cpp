@@ -257,7 +257,10 @@ struct Exporter::Impl {
     }
 
     bool ReencodeAudio() const {
-        if (!s.discordReady) return false;
+        // Only for the MP4/MOV that Discord-ready writes when there is video. An audio-only export keeps its own
+        // container (.opus, .ogg, .flac...), which cannot hold AAC: copying is both lossless and the only thing
+        // that works there (the AAC re-encode made ffmpeg write an empty file).
+        if (!s.discordReady || !IsMp4()) return false;
         for (auto& st : KeptStreams())
             if (st.type == "audio" && !OneOf(st.codec, kWebAudio)) return true;
         return false;
@@ -317,6 +320,9 @@ struct Exporter::Impl {
         if (hasTextSubs && Mp4Like(ext)) Add(a, {L"-c:s", L"mov_text"});
         Add(a, HevcTag(ext));
         if (ReencodeAudio()) Add(a, {L"-c:a", L"aac", L"-b:a", L"160k"});
+        // A copied FLAC stream keeps the source's STREAMINFO (total length), so a 5 s cut claimed the whole song.
+        // Re-encoding FLAC is lossless and fast, and writes the right header.
+        else if (util::Lower(ext) == L".flac") Add(a, {L"-c:a", L"flac"});
         Add(a, {L"-map_metadata", s.preserveMetadata ? L"0" : L"-1"});
         Add(a, {L"-map_chapters", s.preserveChapters ? L"0" : L"-1"});
         if (s.avoidNegativeTs) Add(a, {L"-avoid_negative_ts", L"make_zero"});
@@ -360,6 +366,12 @@ struct Exporter::Impl {
             *moov = L"-movflags";
             *(moov + 1) = L"+faststart";
             r = once();
+        }
+        if (r.code != 0 && !args.empty()) {
+            // Don't leave an empty or half-written file behind (ffmpeg creates the output before it fails).
+            const std::wstring& out = args.back();
+            if (out.find(L'\\') != std::wstring::npos && GetFileAttributesW(out.c_str()) != INVALID_FILE_ATTRIBUTES)
+                DeleteFileW(out.c_str());
         }
         r.Check();
     }

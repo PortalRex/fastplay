@@ -42,6 +42,7 @@ struct StreamInfo {
     int sampleRate = 0, channels = 0;
     int rotation = 0;
     bool isCoverArt = false;
+    bool encrypted = false;  // DRM (iTunes FairPlay "drmi"/"drms"...): ffmpeg can neither copy nor decode it
     bool keep = true;    // exported (Tracks tab)
     std::wstring Details() const;
 };

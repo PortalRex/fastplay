@@ -40,7 +40,9 @@ struct Settings {
     int volume = 100;
     int volumeStep = 5;
     bool mute = false;
-    std::wstring hwdec = L"d3d11va";
+    // Zero-copy d3d11va first; a copy-back hardware decoder (NVDEC, ...) when d3d11va refuses a stream (seen: an HEVC
+    // file flagged Main 10 with 8-bit frames), instead of falling back to software.
+    std::wstring hwdec = L"d3d11va,auto-copy";
     std::wstring vo = L"gpu-next";
     std::wstring screenshotDir;    // empty: Pictures\FastPlay
     std::wstring screenshotFormat = L"png";

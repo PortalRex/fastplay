@@ -142,13 +142,19 @@ void TimingLog(const char* what) {
     fclose(f);
 }
 
-bool TestMode() {
+// FASTPLAY_TEST=1: hidden test copy. FASTPLAY_TEST=visible: the same (muted, no settings/history writes, never
+// activates itself) but on screen, for hand-driven UI tests.
+static int TestValue() {
     static int v = [] {
-        wchar_t b[8];
-        return GetEnvironmentVariableW(L"FASTPLAY_TEST", b, 8) && b[0] == L'1' ? 1 : 0;
+        wchar_t b[16];
+        if (!GetEnvironmentVariableW(L"FASTPLAY_TEST", b, 16)) return 0;
+        return b[0] == L'1' ? 1 : !_wcsicmp(b, L"visible") ? 2 : 0;
     }();
-    return v != 0;
+    return v;
 }
+
+bool TestMode() { return TestValue() != 0; }
+bool TestOffScreen() { return TestValue() == 1; }
 
 const std::wstring& InstanceSuffix() {
     static std::wstring s = [] {

@@ -163,7 +163,7 @@ void Editor::BuildControlRow() {
         it.tip = std::wstring(tip) + (KeyText(id).empty() ? L"" : L" (" + KeyText(id) + L")");
         it.click = [this, id] {
             Run(id);
-            SetFocus(app_->hwnd_);
+            util::FocusIfActive(app_->hwnd_);
         };
         return p.Add(it);
     };
@@ -173,7 +173,7 @@ void Editor::BuildControlRow() {
     setStart.bold = true;
     setStart.fill = theme::Card;
     setStart.tip = L"Set cut start at playhead (" + KeyText(L"setstart") + L")";
-    setStart.click = [this] { Run(L"setstart"); SetFocus(app_->hwnd_); };
+    setStart.click = [this] { Run(L"setstart"); util::FocusIfActive(app_->hwnd_); };
     p.Add(setStart);
     btn(glyph::Cut, nullptr, L"split", L"Split segment at playhead");
     btn(glyph::Camera, nullptr, L"snapshot", L"Snapshot");
@@ -187,7 +187,7 @@ void Editor::BuildControlRow() {
     play.largeIcon = true;
     play.fill = theme::Accent;
     play.tip = L"Play / pause (" + KeyText(L"play") + L")";
-    play.click = [this] { Run(L"play"); SetFocus(app_->hwnd_); };
+    play.click = [this] { Run(L"play"); util::FocusIfActive(app_->hwnd_); };
     p.Add(play);
     btn(glyph::Next, nullptr, L"nextframe", L"Next frame");
     btn(glyph::Next, L"K", L"nextkey", L"Next keyframe");
@@ -212,7 +212,7 @@ void Editor::BuildControlRow() {
     setEnd.bold = true;
     setEnd.fill = theme::Card;
     setEnd.tip = L"Set cut end at playhead (" + KeyText(L"setend") + L")";
-    setEnd.click = [this] { Run(L"setend"); SetFocus(app_->hwnd_); };
+    setEnd.click = [this] { Run(L"setend"); util::FocusIfActive(app_->hwnd_); };
     p.Add(setEnd);
 
     auto makeBox = [&](bool large) {
@@ -234,7 +234,7 @@ void Editor::BuildControlRow() {
             double t;
             if (ParseT(b, &t)) Seek(t);
         }
-        if (how != 2) SetFocus(app_->hwnd_);
+        if (how != 2) util::FocusIfActive(app_->hwnd_);
         else SetWindowTextW(h, FmtT(tl_.position).c_str());
     });
     for (bool isStart : {true, false}) {
@@ -244,7 +244,7 @@ void Editor::BuildControlRow() {
                 GetWindowTextW(h, b, 64);
                 SetCutTime(isStart, b);
             }
-            if (how != 2) SetFocus(app_->hwnd_);
+            if (how != 2) util::FocusIfActive(app_->hwnd_);
             else UpdateCutBoxes();
         });
     }
@@ -576,7 +576,7 @@ void Editor::BuildSidePanel() {
                 if (i >= 0 && i < (int)self->app_->plist_.size() && util::Lower(self->app_->plist_[i]) != util::Lower(self->app_->path_))
                     self->app_->PlaylistActivate(i);
             } else if ((HWND)l == self->rotationBox_ && HIWORD(w) == CBN_SELCHANGE) {
-                SetFocus(self->app_->hwnd_);
+                util::FocusIfActive(self->app_->hwnd_);
             }
             return 0;
         case WM_NOTIFY: {
@@ -883,6 +883,7 @@ void Editor::Enter() {
     if (!app_->fullscreen_ && !IsZoomed(app_->hwnd_)) {
         viewPlacement_.length = sizeof viewPlacement_;
         GetWindowPlacement(app_->hwnd_, &viewPlacement_);
+        GetWindowRect(app_->hwnd_, &viewRect_);
         RECT wr;
         GetWindowRect(app_->hwnd_, &wr);
         HMONITOR mon = MonitorFromWindow(app_->hwnd_, MONITOR_DEFAULTTONEAREST);
@@ -895,7 +896,7 @@ void Editor::Enter() {
             h = std::max(h, (int)(wr.bottom - wr.top));
             int x = std::clamp((int)(wr.left + wr.right) / 2 - w / 2, (int)mi.rcWork.left, std::max((int)mi.rcWork.left, (int)mi.rcWork.right - w));
             int y = std::clamp((int)(wr.top + wr.bottom) / 2 - h / 2, (int)mi.rcWork.top, std::max((int)mi.rcWork.top, (int)mi.rcWork.bottom - h));
-            if (util::TestMode()) {
+            if (util::TestOffScreen()) {
                 x = wr.left;
                 y = wr.top;
             }
@@ -910,7 +911,9 @@ void Editor::Enter() {
     app_->Layout();
     app_->UpdateTitle();
     UpdateChecks();
-    SetFocus(app_->hwnd_);
+    // Only move the keyboard focus back from a child control. SetFocus on an inactive top-level window activates it,
+    // which made a hidden test copy take the foreground when Edit mode was entered by command.
+    util::FocusIfActive(app_->hwnd_);
 }
 
 void Editor::Leave() {
@@ -922,7 +925,14 @@ void Editor::Leave() {
     app_->thumbWnd_->Hide();
     // The timeline filled the thumbnail cache and its decoder; View mode restarts it on the next seekbar hover.
     app_->RetireThumbnails();
-    if (restoreViewPlacement_ && !app_->fullscreen_) SetWindowPlacement(app_->hwnd_, &viewPlacement_);
+    if (restoreViewPlacement_ && !app_->fullscreen_) {
+        WINDOWPLACEMENT wp = viewPlacement_;
+        if (wp.showCmd == SW_SHOWNORMAL) wp.showCmd = SW_SHOWNOACTIVATE;  // restore without activating
+        SetWindowPlacement(app_->hwnd_, &wp);
+        if (util::TestOffScreen())  // Windows clamps placements onto a monitor; a hidden test copy stays off-screen
+            SetWindowPos(app_->hwnd_, nullptr, viewRect_.left, viewRect_.top, viewRect_.right - viewRect_.left,
+                         viewRect_.bottom - viewRect_.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     restoreViewPlacement_ = false;
     DarkTitleBar(app_->hwnd_, false);
     app_->Layout();

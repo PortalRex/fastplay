@@ -9,6 +9,7 @@
 #include <shlobj.h>
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace {
 
@@ -329,7 +330,8 @@ void App::UpdateTaskbar(bool force) {
     if (!force && now - lastTaskbarTick_ < 500) return;
     lastTaskbarTick_ = now;
     int state = !bar_.hasFile || bar_.dur <= 0 ? 0 : bar_.paused ? 2 : 1;
-    if (state != lastTaskbarState_) {
+    bool stateChanged = state != lastTaskbarState_;
+    if (stateChanged) {
         taskbar_->SetProgressState(hwnd_, state == 0 ? TBPF_NOPROGRESS : state == 2 ? TBPF_PAUSED : TBPF_NORMAL);
         if (thumbButtons_) {
             THUMBBUTTON b = {};
@@ -340,7 +342,11 @@ void App::UpdateTaskbar(bool force) {
         }
         lastTaskbarState_ = state;
     }
-    if (state) taskbar_->SetProgressValue(hwnd_, (ULONGLONG)(bar_.pos * 1000), (ULONGLONG)(bar_.dur * 1000));
+    // The taskbar button is a few dozen pixels wide: a cross-process call only when the bar moves by 1/256.
+    int step = state && bar_.dur > 0 ? (int)(std::clamp(bar_.pos / bar_.dur, 0.0, 1.0) * 256) : -1;
+    if (state && (force || stateChanged || step != lastTaskbarStep_))
+        taskbar_->SetProgressValue(hwnd_, (ULONGLONG)(bar_.pos * 1000), (ULONGLONG)(bar_.dur * 1000));
+    lastTaskbarStep_ = step;
 }
 
 // ------------------------------------------------------------------------------------------------ video / audio
@@ -352,8 +358,10 @@ void App::ToggleVideoFilter(const char* label, const char* filter, const wchar_t
     std::string vf = mpvx::GetStr(mpv_, "vf");
     bool on = vf.find(std::string("@") + label + ":") == std::string::npos;  // toggling it on
     bool other = vf.find(std::string(label) == "fpmirror" ? "@fpflip:" : "@fpmirror:") != std::string::npos;
-    if (on && !other && s_.hwdec.find(L"copy") == std::wstring::npos && s_.hwdec != L"no")
-        mpvx::SetStr(mpv_, "hwdec", (util::Utf8(s_.hwdec) == "d3d11va" ? "d3d11va-copy" : "auto-copy"));
+    // Only the first entry of the hwdec list decides whether frames stay on the GPU ("d3d11va,auto-copy").
+    std::wstring firstHw = s_.hwdec.substr(0, s_.hwdec.find(L','));
+    if (on && !other && firstHw.find(L"copy") == std::wstring::npos && firstHw != L"no")
+        mpvx::SetStr(mpv_, "hwdec", firstHw == L"d3d11va" ? "d3d11va-copy,auto-copy" : "auto-copy");
     mpvx::Cmd(mpv_, {"vf", "toggle", spec.c_str()});
     if (!on && !other) {
         std::string hw = util::Utf8(s_.hwdec);
@@ -622,6 +630,56 @@ void App::OpenUrlDialog() {
 
 // ------------------------------------------------------------------------------------------------ actions, menus
 
+void App::ZoomAutofitLarger() {
+    // MPC-HC "Auto fit (larger only)": shrink to fit when the video is bigger than the auto-fit area, else 100 %.
+    if (vidW_ <= 0 || vidH_ <= 0) return;
+    MONITORINFO mi = {sizeof mi};
+    GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+    double maxW = (mi.rcWork.right - mi.rcWork.left) * s_.autofitPercent / 100.0;
+    double maxH = (mi.rcWork.bottom - mi.rcWork.top) * s_.autofitPercent / 100.0;
+    if (vidW_ > maxW || vidH_ > maxH) ResizeToVideo(0, true);
+    else ResizeToVideo(1, false);
+}
+
+void App::RecycleCurrent() {
+    // MPC-HC's Delete: ask (Windows itself no longer does by default), move to the next file, then recycle.
+    if (path_.empty() || path_.find(L"://") != std::wstring::npos) return;
+    std::wstring victim = path_;
+    mpvx::SetFlag(mpv_, "pause", true);
+    std::wstring msg = L"Move file to the Recycle Bin?\n\n" + victim;
+    if (util::TestMode()) {  // test copies never delete anything and never show dialogs
+        util::TimingLog(("recycle: would ask: " + util::Utf8(victim)).c_str());
+        return;
+    }
+    if (MessageBoxW(hwnd_, msg.c_str(), L"FastPlay", MB_ICONQUESTION | MB_YESNO | MB_DEFBUTTON2) != IDYES) return;
+    int idx = plPos_;
+    if (idx >= 0 && idx < (int)plist_.size() && plist_.size() > 1) {
+        PlaylistRemove(idx);
+        PlaylistActivate(std::min(idx, (int)plist_.size() - 1));
+    } else {
+        StepFile(1);
+        if (path_ == victim) StepFile(-1);
+        if (path_ == victim) CloseFile();
+    }
+    HWND hwnd = hwnd_;
+    std::thread([hwnd, victim] {
+        // libmpv, the thumbnailer and the header reader let go of the file within moments of the switch.
+        std::wstring from = victim + L'\0';  // double-NUL terminated list
+        bool ok = false;
+        for (int i = 0; i < 30 && !ok; i++) {
+            SHFILEOPSTRUCTW op = {};
+            op.wFunc = FO_DELETE;
+            op.pFrom = from.c_str();
+            op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+            ok = SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted &&
+                 GetFileAttributesW(victim.c_str()) == INVALID_FILE_ATTRIBUTES;
+            if (!ok) Sleep(200);
+        }
+        auto* name = new std::wstring(util::FileName(victim));
+        if (!PostMessageW(hwnd, WM_APP_RECYCLED, ok, (LPARAM)name)) delete name;
+    }).detach();
+}
+
 bool App::ExtraAction(Act a) {
     switch (a) {
     case Act::Playlist: TogglePlaylistWindow(); return true;
@@ -630,6 +688,53 @@ bool App::ExtraAction(Act a) {
     default: break;
     }
     if (!mpv_) return true;
+    switch (a) {
+    case Act::Reopen: {
+        if (path_.empty()) return true;
+        double pos = mpvx::GetDouble(mpv_, "time-pos", 0);
+        startOverride_ = pos;  // opens fast on the keyframe before...
+        Open(path_);
+        exactSeekAfterOpen_ = pos;  // ...then lands on the exact frame, like MPC-HC
+        return true;
+    }
+    case Act::Recycle: RecycleCurrent(); return true;
+    case Act::LoadSubtitles: if (!path_.empty()) OnMenuCommand(kCmdLoadSub); return true;
+    case Act::OpenLocation: if (!path_.empty() && path_.find(L"://") == std::wstring::npos) OnMenuCommand(kCmdOpenFolder); return true;
+    case Act::BossKey:
+        mpvx::SetFlag(mpv_, "pause", true);
+        if (fullscreen_) DoAction(Act::Fullscreen);
+        ShowWindow(hwnd_, SW_MINIMIZE);
+        return true;
+    case Act::OsdTime:
+        // MPC-HC keeps the time on screen until toggled off; mpv's OSD level 3 does the same.
+        osdTime_ = !osdTime_;
+        mpvx::SetStr(mpv_, "osd-level", osdTime_ ? "3" : "1");
+        return true;
+    case Act::OsdFilename: if (!path_.empty()) mpvx::ShowText(mpv_, util::FileName(path_), 2000); return true;
+    case Act::SubLinePrev: mpvx::CmdAsync(mpv_, {"sub-seek", "-1"}); return true;
+    case Act::SubLineNext: mpvx::CmdAsync(mpv_, {"sub-seek", "1"}); return true;
+    case Act::SubShiftUp: mpvx::CmdAsync(mpv_, {"osd-msg", "sub-step", "-1"}); return true;
+    case Act::SubShiftDown: mpvx::CmdAsync(mpv_, {"osd-msg", "sub-step", "1"}); return true;
+    case Act::Zoom25: ResizeToVideo(0.25, false); return true;
+    case Act::ZoomAutofitLarger: ZoomAutofitLarger(); return true;
+    case Act::WidthUp: case Act::WidthDown: case Act::HeightUp: case Act::HeightDown: {
+        // MPC-HC: 2 % per press, 0.2x-5x.
+        double& v = a == Act::WidthUp || a == Act::WidthDown ? scaleX_ : scaleY_;
+        v = std::clamp(a == Act::WidthUp || a == Act::HeightUp ? v * 1.02 : v / 1.02, 0.2, 5.0);
+        mpvx::SetDouble(mpv_, "video-scale-x", scaleX_);
+        mpvx::SetDouble(mpv_, "video-scale-y", scaleY_);
+        wchar_t b[64];
+        swprintf(b, 64, L"Stretch %.0f%% x %.0f%%", scaleX_ * 100, scaleY_ * 100);
+        mpvx::ShowText(mpv_, b);
+        return true;
+    }
+    case Act::PanUpLeft: PanZoom(-0.02, -0.02, 0); return true;
+    case Act::PanUpRight: PanZoom(0.02, -0.02, 0); return true;
+    case Act::PanDownLeft: PanZoom(-0.02, 0.02, 0); return true;
+    case Act::PanDownRight: PanZoom(0.02, 0.02, 0); return true;
+    case Act::PanCenter: if (panX_ || panY_) PanZoom(-panX_, -panY_, 0); return true;
+    default: break;
+    }
     switch (a) {
     case Act::AspectNext:
         aspectIdx_ = (aspectIdx_ + 1) % (int)std::size(kAspects);

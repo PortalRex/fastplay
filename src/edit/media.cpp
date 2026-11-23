@@ -140,6 +140,8 @@ MediaInfo ParseProbe(const std::wstring& path, const std::string& json) {
             }
             if (const Json* disp = st.Get("disposition"); disp && disp->Get("attached_pic") && disp->Num("attached_pic") == 1)
                 s.isCoverArt = true;
+            std::string tag = st.Str("codec_tag_string");
+            s.encrypted = tag == "drmi" || tag == "drms" || tag == "drmz" || tag == "encv" || tag == "enca";
             // Data streams (tmcd, gpmd...) usually break remuxing to other containers, so default them off.
             s.keep = s.type == "video" || s.type == "audio" || s.type == "subtitle";
             m.streams.push_back(std::move(s));

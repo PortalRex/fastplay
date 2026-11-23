@@ -207,6 +207,7 @@ void App::OnMpvReady(bool ok) {
         return;
     }
     DrainEvents();
+    UpdateDurationObserver();  // the header index may have arrived first
     std::wstring file;
     double start;
     {
@@ -227,9 +228,11 @@ double App::PrepareOpen(const std::wstring& path) {
     ResumeStore::Stat(path, &fileSize_, &fileMtime_);
     loadSerial_++;
     firstFrameLogged_ = false;
+    exactSeekAfterOpen_ = -1;
     fitPending_ = true;
     indexReady_ = false;
     index_ = MediaIndex{};
+    UpdateDurationObserver();
     vidW_ = vidH_ = 0;
     bar_ = BarState{bar_.hasFile, true, bar_.mute, bar_.remaining, 0, 0, bar_.speed, -1, -1, bar_.volume, bar_.volumeMax, {}};
     bar_.hasFile = true;
@@ -404,6 +407,7 @@ void App::OnIndex(void* raw, unsigned serial) {
     if (!m->ok) return;
     index_ = std::move(m->idx);
     indexReady_ = true;
+    UpdateDurationObserver();
     if (index_.duration > bar_.dur) {
         bar_.dur = index_.duration;
         if (thumbs_) thumbs_->SetDuration(bar_.dur);
@@ -455,6 +459,11 @@ void App::DrainEvents() {
                 }
                 SetTimer(hwnd_, 3, 1500, nullptr);  // start thumbnails once playback has settled
                 mpvx::SetStr(mpv_, "hr-seek", "default");  // the resume seek used keyframes only
+                if (exactSeekAfterOpen_ >= 0) {
+                    std::string t = std::to_string(exactSeekAfterOpen_);
+                    mpvx::CmdAsync(mpv_, {"seek", t.c_str(), "absolute+exact"});
+                    exactSeekAfterOpen_ = -1;
+                }
             }
             bar_.pos = mpvx::GetDouble(mpv_, "time-pos", bar_.pos);
             {
@@ -484,6 +493,7 @@ void App::DrainEvents() {
 }
 
 void App::OnProperty(mpv_event_property* p) {
+    BarState before = bar_;
     auto dbl = [&](double def) { return p->format == MPV_FORMAT_DOUBLE && p->data ? *(double*)p->data : def; };
     auto flag = [&] { return p->format == MPV_FORMAT_FLAG && p->data && *(int*)p->data != 0; };
     auto i64 = [&] { return p->format == MPV_FORMAT_INT64 && p->data ? *(int64_t*)p->data : 0; };
@@ -532,7 +542,19 @@ void App::OnProperty(mpv_event_property* p) {
         }
     }
     if (!idle_ && !path_.empty()) bar_.hasFile = true;
-    RefreshBar();
+    if (bar_ != before) RefreshBar();
+}
+
+void App::UpdateDurationObserver() {
+    // A fragmented MP4 opened through its mfra: libmpv's "duration" grows as it reads (~35 changes a second while
+    // playing), but the header index already has the real length. Each change woke the UI thread and repainted the
+    // bar, a large part of FastPlay's own playback CPU, so it isn't observed for such files.
+    if (!mpv_) return;
+    bool want = !(indexReady_ && index_.fragmented && index_.duration > 0);
+    if (want == durationObserved_) return;
+    if (want) g_mpv.mpv_observe_property(mpv_, kPropDuration, "duration", MPV_FORMAT_DOUBLE);
+    else g_mpv.mpv_unobserve_property(mpv_, kPropDuration);
+    durationObserved_ = want;
 }
 
 void App::UpdateTitle() {

@@ -275,6 +275,7 @@ LRESULT Panel::On(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_CAPTURECHANGED:
+        if (util::KeepDragOnCaptureLoss()) return 0;
         pressed_ = -1;
         sliderDrag_ = false;
         return 0;

@@ -15,4 +15,6 @@ struct MediaIndex {
 
 // Reads header boxes only. allowFragmentScan: when a fragmented file has no mfra, walk every moof
 // (one small read per fragment; slow on spinning disks, so only from a background thread).
+// Matroska/WebM files are read from their SeekHead + Cues (mkvindex.cpp).
 bool ReadMediaIndex(const std::wstring& path, MediaIndex* out, bool allowFragmentScan);
+bool ReadMkvIndex(const std::wstring& path, MediaIndex* out);
