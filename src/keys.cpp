@@ -70,6 +70,30 @@ static const ActionInfo kActions[] = {
     {Act::Properties, L"properties", L"Properties", L"Shift+F10"},
     {Act::EditSettings, L"options", L"Options (edit fastplay.ini)", L"O"},
     {Act::Menu, L"menu", L"Context menu", L"Apps"},
+    {Act::Playlist, L"playlist", L"Playlist", L"Ctrl+7"},
+    {Act::OpenUrl, L"open_url", L"Open URL...", L"Ctrl+U"},
+    {Act::AspectNext, L"aspect_ratio_next", L"Next aspect ratio", L""},
+    {Act::RotateCW, L"rotate_cw", L"Rotate 90° clockwise", L"Alt+Num6"},
+    {Act::RotateCCW, L"rotate_ccw", L"Rotate 90° counterclockwise", L"Alt+Num4"},
+    {Act::FlipH, L"flip_horizontal", L"Mirror", L""},
+    {Act::FlipV, L"flip_vertical", L"Flip", L""},
+    {Act::Deinterlace, L"deinterlace", L"Deinterlace", L"Ctrl+Shift+D"},
+    {Act::BrightnessUp, L"brightness_up", L"Brightness +", L""},
+    {Act::BrightnessDown, L"brightness_down", L"Brightness -", L""},
+    {Act::ContrastUp, L"contrast_up", L"Contrast +", L""},
+    {Act::ContrastDown, L"contrast_down", L"Contrast -", L""},
+    {Act::SaturationUp, L"saturation_up", L"Saturation +", L""},
+    {Act::SaturationDown, L"saturation_down", L"Saturation -", L""},
+    {Act::ColorReset, L"color_reset", L"Reset colors", L""},
+    {Act::Normalize, L"normalize", L"Normalize volume", L""},
+    {Act::SubSizeUp, L"subtitle_bigger", L"Subtitles bigger", L""},
+    {Act::SubSizeDown, L"subtitle_smaller", L"Subtitles smaller", L""},
+    {Act::SubPosUp, L"subtitle_up", L"Subtitles up", L""},
+    {Act::SubPosDown, L"subtitle_down", L"Subtitles down", L""},
+    {Act::RepeatFile, L"repeat_file", L"Repeat file", L""},
+    {Act::OpenInFastCut, L"open_in_fastcut", L"Edit in FastCut", L"Ctrl+E"},
+    {Act::SaveClip, L"save_clip", L"Save clip (lossless)...", L"Ctrl+Shift+S"},
+    {Act::Help, L"help", L"Keyboard shortcuts", L"Ctrl+F1"},
 };
 
 const ActionInfo* Actions(int* count) {
@@ -179,12 +203,14 @@ static void ForEachChord(const std::wstring& list, const std::function<void(uint
 void KeyMap::Load(const Ini& ini) {
     map_.clear();
     text_.clear();
+    all_.clear();
     for (const auto& a : kActions) {
         std::wstring list = ini.Has(L"keys", a.id) ? ini.Get(L"keys", a.id) : a.defaults;
         bool first = true;
         ForEachChord(list, [&](uint32_t c) {
             map_[c] = a.act;
             if (first) text_[(int)a.act] = ChordName(c);
+            all_[(int)a.act] += (first ? L"" : L", ") + ChordName(c);
             first = false;
         });
     }
@@ -203,4 +229,9 @@ Act KeyMap::Lookup(uint32_t chord) const {
 std::wstring KeyMap::ShortcutText(Act a) const {
     auto it = text_.find((int)a);
     return it == text_.end() ? L"" : it->second;
+}
+
+std::wstring KeyMap::AllShortcuts(Act a) const {
+    auto it = all_.find((int)a);
+    return it == all_.end() ? L"" : it->second;
 }

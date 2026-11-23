@@ -138,6 +138,9 @@ double ToSeconds(const Track& t, int64_t mediaTicks) {
     return (double)(mediaTicks - t.mediaTime) / t.scale + t.emptyDelay;
 }
 
+// Fragment times: FFmpeg (and so mpv) ignores the edit list for fragmented MP4, so the raw media time is the pts.
+double FragSeconds(const Track& t, int64_t mediaTicks) { return (double)mediaTicks / t.scale; }
+
 // Regular MP4: walk stts/ctts up to each stss sync sample (FastCut's ReadTrack).
 void ReadSampleTables(const Buf& b, const Track& t, MediaIndex* out) {
     Box stts, ctts, stss;
@@ -209,7 +212,7 @@ bool ReadMfra(const File& f, const Track& t, MediaIndex* out) {
         for (uint32_t i = 0; i < n && p + es <= tfra.end; i++, p += es) {
             uint64_t time = v1 ? Be64(&b[p]) : Be32(&b[p]);
             uint64_t off = v1 ? Be64(&b[p + 8]) : Be32(&b[p + 4]);
-            out->keyTimes.push_back(ToSeconds(t, (int64_t)time));
+            out->keyTimes.push_back(FragSeconds(t, (int64_t)time));
             out->keyOffsets.push_back(off);
         }
         got = true;
@@ -252,7 +255,7 @@ double FragmentEnd(const File& f, uint64_t off, const Track& t) {
                 total += (rf & 0x100) ? Be32(&b[q]) : defDur;
             return true;
         });
-        end = ToSeconds(t, (int64_t)(time + total));
+        end = FragSeconds(t, (int64_t)(time + total));
         return false;
     });
     return end;
@@ -276,7 +279,7 @@ void ScanFragments(const File& f, uint64_t pos, const Track& t, MediaIndex* out)
                 if (!Child(b, traf, FourCC("tfhd"), &tfhd) || (t.id && Be32(&b[tfhd.body + 4]) != t.id)) return true;
                 if (!Child(b, traf, FourCC("tfdt"), &tfdt)) return false;
                 uint64_t time = b[tfdt.body] == 1 ? Be64(&b[tfdt.body + 4]) : Be32(&b[tfdt.body + 4]);
-                out->keyTimes.push_back(ToSeconds(t, (int64_t)time));
+                out->keyTimes.push_back(FragSeconds(t, (int64_t)time));
                 out->keyOffsets.push_back(pos);
                 return false;
             });

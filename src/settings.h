@@ -45,6 +45,11 @@ struct Settings {
     std::wstring screenshotDir;    // empty: Pictures\FastPlay
     std::wstring screenshotFormat = L"png";
     std::wstring mpvOptions;       // extra "name=value;name=value" passed to mpv before init
+    int afterPlayback = 0;         // 0 nothing, 1 next file, 2 repeat file, 3 close, 4 exit (MPC-HC "After playback")
+    int volumeMax = 100;           // up to 200 for boost
+    bool taskbarProgress = true;   // progress + play/pause/prev/next buttons on the taskbar thumbnail
+    std::wstring fastcutPath;      // FastCut.exe (empty: next to FastPlay, or the fastcut/dist folder beside it)
+    std::wstring ffmpegPath;       // for lossless clip export (empty: ffmpeg.exe on PATH)
     bool onTop = false;
     bool showControls = true;
     bool showCaption = true;

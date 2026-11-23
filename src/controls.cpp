@@ -1,5 +1,6 @@
 #include "controls.h"
 #include "app.h"
+#include <commctrl.h>
 #include <algorithm>
 
 namespace {
@@ -137,7 +138,7 @@ double ControlBar::SeekTimeAt(int x) const {
 
 int ControlBar::VolumeAt(int x) const {
     int l = vol_.left + S(4), r = vol_.right - S(4);
-    return (int)std::lround(std::clamp((double)(x - l) / std::max(1, r - l), 0.0, 1.0) * 100);
+    return (int)std::lround(std::clamp((double)(x - l) / std::max(1, r - l), 0.0, 1.0) * app_->Bar().volumeMax);
 }
 
 LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
@@ -164,12 +165,25 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         RECT rc;
         GetClientRect(hwnd_, &rc);
         LayoutParts(rc);
+        UpdateTipRects();
         Invalidate();
         return 0;
+    }
+    case WM_NOTIFY: {
+        auto* nm = (NMHDR*)l;
+        if (tip_ && nm->hwndFrom == tip_ && nm->code == TTN_GETDISPINFOW) {
+            auto* di = (NMTTDISPINFOW*)l;
+            static std::wstring text;  // must outlive the notification
+            text = TipText((int)di->hdr.idFrom);
+            di->lpszText = text.data();
+            return 0;
+        }
+        break;
     }
     case WM_MOUSEMOVE: {
         POINT p = {(short)LOWORD(l), (short)HIWORD(l)};
         app_->NoteMouseActivity();
+        EnsureTips();
         TRACKMOUSEEVENT t = {sizeof t, TME_LEAVE, hwnd_, 0};
         TrackMouseEvent(&t);
         Part hp = dragging_ != Part::None ? dragging_ : HitTest(p);
@@ -270,6 +284,57 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     return DefWindowProcW(hwnd_, m, w, l);
+}
+
+void ControlBar::EnsureTips() {
+    if (tip_) return;
+    INITCOMMONCONTROLSEX ic = {sizeof ic, ICC_WIN95_CLASSES};
+    InitCommonControlsEx(&ic);
+    tip_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                           0, 0, 0, 0, hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!tip_) return;
+    const RECT* rects[] = {&play_, &stop_, &prev_, &next_, &step_, &time_, &mute_, &vol_};
+    const Part parts[] = {Part::Play, Part::Stop, Part::Prev, Part::Next, Part::Step, Part::Time, Part::Mute, Part::Volume};
+    for (int i = 0; i < 8; i++) {
+        TTTOOLINFOW ti = {sizeof ti};
+        ti.uFlags = TTF_SUBCLASS;
+        ti.hwnd = hwnd_;
+        ti.uId = (UINT_PTR)parts[i];
+        ti.rect = *rects[i];
+        ti.lpszText = LPSTR_TEXTCALLBACKW;
+        SendMessageW(tip_, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    }
+}
+
+void ControlBar::UpdateTipRects() {
+    if (!tip_) return;
+    const RECT* rects[] = {&play_, &stop_, &prev_, &next_, &step_, &time_, &mute_, &vol_};
+    const Part parts[] = {Part::Play, Part::Stop, Part::Prev, Part::Next, Part::Step, Part::Time, Part::Mute, Part::Volume};
+    for (int i = 0; i < 8; i++) {
+        TTTOOLINFOW ti = {sizeof ti};
+        ti.hwnd = hwnd_;
+        ti.uId = (UINT_PTR)parts[i];
+        ti.rect = *rects[i];
+        SendMessageW(tip_, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+    }
+}
+
+std::wstring ControlBar::TipText(int part) {
+    auto with = [&](const wchar_t* label, Act a) {
+        std::wstring k = app_->ShortcutText(a);
+        return k.empty() ? std::wstring(label) : std::wstring(label) + L"  (" + k + L")";
+    };
+    switch ((Part)part) {
+    case Part::Play: return with(app_->Bar().paused ? L"Play" : L"Pause", Act::PlayPause);
+    case Part::Stop: return with(L"Stop", Act::Stop);
+    case Part::Prev: return with(L"Previous file", Act::PrevFile);
+    case Part::Next: return with(L"Next file", Act::NextFile);
+    case Part::Step: return with(L"Frame step", Act::FrameStep);
+    case Part::Time: return L"Click: elapsed / remaining";
+    case Part::Mute: return with(app_->Bar().mute ? L"Unmute" : L"Mute", Act::Mute);
+    case Part::Volume: return L"Volume " + std::to_wstring(app_->Bar().volume) + L"%  (wheel, Up/Down)";
+    default: return L"";
+    }
 }
 
 void ControlBar::Paint(HDC dc, const RECT& rc) {
@@ -383,7 +448,8 @@ void ControlBar::Paint(HDC dc, const RECT& rc) {
         int vl = vol_.left + S(4), vr = vol_.right - S(4), vy = (vol_.top + vol_.bottom) / 2;
         RECT vt = {vl, vy - S(2), vr, vy + S(2)};
         Fill(dc, vt, kTrack);
-        int vx = vl + (vr - vl) * std::clamp(b.volume, 0, 100) / 100;
+        int vmax = std::max(1, b.volumeMax);
+        int vx = vl + (vr - vl) * std::clamp(b.volume, 0, vmax) / vmax;
         RECT vf = {vl, vy - S(2), vx, vy + S(2)};
         Fill(dc, vf, b.mute ? kDim : kAccent);
         Ellipse2(dc, vx, vy, S(5), kText);

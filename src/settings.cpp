@@ -164,6 +164,11 @@ void Settings::Load(const Ini& ini) {
     screenshotDir = ini.Get(s, L"screenshot_dir", screenshotDir);
     screenshotFormat = ini.Get(s, L"screenshot_format", screenshotFormat);
     mpvOptions = ini.Get(s, L"mpv_options", mpvOptions);
+    afterPlayback = ini.GetInt(s, L"after_playback", afterPlayback);
+    volumeMax = ini.GetInt(s, L"volume_max", volumeMax);
+    taskbarProgress = ini.GetInt(s, L"taskbar_progress", taskbarProgress) != 0;
+    fastcutPath = ini.Get(s, L"fastcut_path", fastcutPath);
+    ffmpegPath = ini.Get(s, L"ffmpeg_path", ffmpegPath);
     onTop = ini.GetInt(s, L"on_top", onTop) != 0;
     showControls = ini.GetInt(s, L"show_controls", showControls) != 0;
     showCaption = ini.GetInt(s, L"show_caption", showCaption) != 0;
@@ -171,7 +176,9 @@ void Settings::Load(const Ini& ini) {
     winH = ini.GetInt(s, L"window_height", winH);
     if (autofitPercent < 20 || autofitPercent > 100) autofitPercent = 75;
     if (thumbCache < 10) thumbCache = 10;
-    if (volume < 0 || volume > 100) volume = 100;
+    if (volumeMax < 100 || volumeMax > 200) volumeMax = 100;
+    if (volume < 0 || volume > volumeMax) volume = 100;
+    if (afterPlayback < 0 || afterPlayback > 4) afterPlayback = 0;
 }
 
 void Settings::Save(Ini& ini) const {
@@ -198,6 +205,11 @@ void Settings::Save(Ini& ini) const {
     ini.Set(s, L"screenshot_dir", screenshotDir);
     ini.Set(s, L"screenshot_format", screenshotFormat);
     ini.Set(s, L"mpv_options", mpvOptions);
+    ini.Set(s, L"after_playback", std::to_wstring(afterPlayback));
+    ini.Set(s, L"volume_max", std::to_wstring(volumeMax));
+    ini.Set(s, L"taskbar_progress", taskbarProgress ? L"1" : L"0");
+    ini.Set(s, L"fastcut_path", fastcutPath);
+    ini.Set(s, L"ffmpeg_path", ffmpegPath);
     ini.Set(s, L"on_top", onTop ? L"1" : L"0");
     ini.Set(s, L"show_controls", showControls ? L"1" : L"0");
     ini.Set(s, L"show_caption", showCaption ? L"1" : L"0");

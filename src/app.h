@@ -18,15 +18,33 @@ enum : UINT {
     WM_APP_THUMB,              // a thumbnail finished decoding
     WM_APP_TRAY,               // tray icon callback
     WM_APP_DISABLE_CHILD,      // mpv created its video window: make it mouse-transparent
+    WM_APP_CLIP_DONE,          // lossless clip export finished (wParam = ok, lParam = std::wstring* message)
 };
 
-constexpr ULONG_PTR kCopyDataOpen = 0x464C5059;    // 'FPLY': WM_COPYDATA payload is a UTF-16 path
+// Menu / taskbar command ids shared by window.cpp and features.cpp.
+enum : UINT {
+    kCmdAction = 1000,  // + Act
+    kCmdAudio = 2000,   // + track id
+    kCmdSub = 3000,     // + track id (3000 = off)
+    kCmdRecent = 4000,  // + index
+    kCmdChapter = 5000, // + index
+    kCmdTrayOpen = 6000, kCmdTrayShow, kCmdTrayExit, kCmdLoadSub, kCmdOpenFolder,
+    kCmdSpeed = 6100,      // + index
+    kCmdThumbPrev = 7001, kCmdThumbPlay, kCmdThumbNext,
+    kCmdAudioDev = 7100,   // + index into the device list
+    kCmdAspect = 7200,     // + index
+    kCmdAfter = 7300,      // + after-playback mode
+    kCmdAssocOn = 7400, kCmdAssocOff, kCmdAddFiles, kCmdClearPlaylist, kCmdAbout,
+    kCmdVolMax = 7500,     // + index
+};
+
+constexpr ULONG_PTR kCopyDataOpen = 0x464C5059;    // 'FPLY': WM_COPYDATA payload: UTF-16 paths separated by '\n'
 constexpr ULONG_PTR kCopyDataCommand = 0x46504143; // 'FPAC': "action <id>", "hover <sec>", "seek <sec>" (scripting/tests)
 
 struct BarState {
     bool hasFile = false, paused = true, mute = false, remaining = false;
     double pos = 0, dur = 0, speed = 1, abA = -1, abB = -1;
-    int volume = 100;
+    int volume = 100, volumeMax = 100;
     std::vector<double> chapters;
 };
 
@@ -44,6 +62,7 @@ public:
     void ShowContextMenu(POINT screen);
     void HoverSeek(double t, POINT anchorScreen);  // t < 0 hides the preview
     const BarState& Bar() const { return bar_; }
+    std::wstring ShortcutText(Act a) const { return keys_.ShortcutText(a); }
     void ToggleRemaining();
     int Dpi() const { return dpi_; }
     HWND Hwnd() const { return hwnd_; }
@@ -114,6 +133,35 @@ private:
     void PanZoom(double dx, double dy, double dz);
     void ChangeSpeed(int dir);
 
+    // features.cpp: playlist, after playback, video/audio extras, taskbar, associations, FastCut, clips, help
+    void OpenFiles(const std::vector<std::wstring>& files, bool append);
+    bool StepPlaylist(int dir);
+    void OnEndOfFile();
+    void SetAfterPlayback(int mode);
+    void TogglePlaylistWindow();
+    void RefreshPlaylistWindow();
+    static LRESULT CALLBACK PlaylistProc(HWND, UINT, WPARAM, LPARAM);
+    void PlaylistActivate(int index);
+    void PlaylistRemove(int index);
+    void OnTaskbarButtonCreated();
+    void InitTaskbar();
+    void UpdateTaskbar(bool force);
+    void ToggleVideoFilter(const char* label, const char* filter, const wchar_t* name);
+    void AdjustColor(const char* prop, int delta);
+    std::vector<std::pair<std::string, std::wstring>> AudioDevices();
+    void SetAssociations(bool on);
+    std::wstring FindFastCut();
+    void OpenInFastCut();
+    void SaveClip();                                                  // asks for the output name
+    void StartClip(const std::wstring& out, const std::wstring& ffmpeg); // runs ffmpeg -c copy on the A-B range
+    std::wstring FindFfmpeg();
+    void OnClipDone(bool ok, std::wstring* msg);
+    void ShowHelp();
+    void OpenUrlDialog();
+    bool ExtraAction(Act a);           // handles the actions added in features.cpp
+    void BuildExtraMenus(HMENU m, HMENU play, HMENU video, HMENU audio, HMENU subs);
+    bool ExtraMenuCommand(UINT id);
+
     HINSTANCE inst_ = nullptr;
     HWND hwnd_ = nullptr, video_ = nullptr, mpvChild_ = nullptr;
     ControlBar* barWnd_ = nullptr;
@@ -170,6 +218,32 @@ private:
     bool benchExit_ = false;
     bool quitting_ = false;
     UINT taskbarCreatedMsg_ = 0;
+
+    // Playlist (several files opened/dropped at once); single files navigate their folder instead.
+    std::vector<std::wstring> plist_;
+    int plPos_ = -1;
+    HWND plWnd_ = nullptr, plList_ = nullptr;
+    HFONT plFont_ = nullptr;
+    HBRUSH plBrush_ = nullptr;
+    bool eofHandled_ = false;
+
+    // Taskbar progress and thumbnail buttons
+    UINT taskbarButtonMsg_ = 0;
+    struct ITaskbarList3* taskbar_ = nullptr;
+    bool taskbarWanted_ = false, thumbButtons_ = false, comInit_ = false;
+    HICON tbIcons_[4] = {};  // prev, play, pause, next
+    DWORD lastTaskbarTick_ = 0;
+    int lastTaskbarState_ = -1;
+
+    // Video/audio extras
+    int aspectIdx_ = 0, rotate_ = 0;
+    std::vector<std::string> audioDevNames_;
+
+    // Lossless clip export (ffmpeg -c copy)
+    std::thread clipThread_;
+    HANDLE clipProcess_ = nullptr;
+    std::wstring clipOut_;
+    bool clipBusy_ = false;
 };
 
 extern App* g_app;

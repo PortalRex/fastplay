@@ -2,7 +2,7 @@
 # window images with PrintWindow (works for off-screen windows too).
 #   fpctl.ps1 -Pid <pid> -Command "action fullscreen" | "seek 120" | "hover 300" | "open <path>"
 #   fpctl.ps1 -Pid <pid> -Shot out.png [-Popup]     (main window, or the seekbar thumbnail popup)
-param([Parameter(Mandatory)][int]$ProcessId, [string]$Command, [string]$Shot, [switch]$Popup)
+param([Parameter(Mandatory)][int]$ProcessId, [string]$Command, [string]$Shot, [switch]$Popup, [string]$Class)
 Add-Type -ReferencedAssemblies System.Drawing @"
 using System;
 using System.Drawing;
@@ -41,6 +41,6 @@ $main = [FpCtl]::Find([uint32]$ProcessId, 'FastPlay.Main')
 if ($main -eq [IntPtr]::Zero) { throw "no FastPlay window for pid $ProcessId" }
 if ($Command) { [FpCtl]::Send($main, $Command) }
 if ($Shot) {
-  $h = if ($Popup) { [FpCtl]::Find([uint32]$ProcessId, 'FastPlay.Thumb') } else { $main }
+  $h = if ($Class) { [FpCtl]::Find([uint32]$ProcessId, $Class) } elseif ($Popup) { [FpCtl]::Find([uint32]$ProcessId, 'FastPlay.Thumb') } else { $main }
   if (-not [FpCtl]::Shot($h, $Shot)) { Write-Output "window not visible" }
 }

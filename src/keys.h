@@ -22,6 +22,9 @@ enum class Act : int {
     ScreenshotSave, ScreenshotAuto,
     AbStart, AbEnd, AbClear,
     Stats, Properties, EditSettings, Menu,
+    Playlist, OpenUrl, AspectNext, RotateCW, RotateCCW, FlipH, FlipV, Deinterlace,
+    BrightnessUp, BrightnessDown, ContrastUp, ContrastDown, SaturationUp, SaturationDown, ColorReset,
+    Normalize, SubSizeUp, SubSizeDown, SubPosUp, SubPosDown, RepeatFile, OpenInFastCut, SaveClip, Help,
     Count
 };
 
@@ -49,8 +52,9 @@ public:
     void WriteDefaults(Ini& ini) const;  // adds missing actions to [keys] so the file documents everything
     Act Lookup(uint32_t chord) const;
     std::wstring ShortcutText(Act a) const;  // first binding, for menus
+    std::wstring AllShortcuts(Act a) const;  // every binding, comma separated
 
 private:
     std::unordered_map<uint32_t, Act> map_;
-    std::unordered_map<int, std::wstring> text_;
+    std::unordered_map<int, std::wstring> text_, all_;
 };

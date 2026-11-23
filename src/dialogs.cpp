@@ -123,3 +123,58 @@ std::wstring PickSaveFile(HWND owner, const std::wstring& initialDir, const std:
     o.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
     return GetSaveFileNameW(&o) ? file : L"";
 }
+
+std::vector<std::wstring> PickOpenFiles(HWND owner, const std::wstring& initialDir) {
+    std::vector<wchar_t> buf(64 * 1024, 0);
+    OPENFILENAMEW o = {sizeof o};
+    o.hwndOwner = owner;
+    o.lpstrFilter = kMediaFilter;
+    o.lpstrFile = buf.data();
+    o.nMaxFile = (DWORD)buf.size();
+    o.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
+    o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_ALLOWMULTISELECT;
+    std::vector<std::wstring> out;
+    if (!GetOpenFileNameW(&o)) return out;
+    // One file: full path. Several: folder, then names, each NUL-terminated, list ends with an empty string.
+    std::wstring first = buf.data();
+    const wchar_t* p = buf.data() + first.size() + 1;
+    if (!*p) {
+        out.push_back(first);
+        return out;
+    }
+    for (; *p; p += wcslen(p) + 1) out.push_back(first + L"\\" + p);
+    return out;
+}
+
+namespace {
+INT_PTR CALLBACK TextProc(HWND d, UINT m, WPARAM w, LPARAM l) {
+    switch (m) {
+    case WM_INITDIALOG:
+        SetDlgItemTextW(d, 101, (const wchar_t*)l);
+        SendDlgItemMessageW(d, 101, EM_SETSEL, 0, 0);
+        SetFocus(GetDlgItem(d, IDOK));
+        return FALSE;
+    case WM_COMMAND:
+        if (LOWORD(w) == IDOK || LOWORD(w) == IDCANCEL) {
+            EndDialog(d, IDOK);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+}  // namespace
+
+void ShowTextBox(HWND owner, const wchar_t* title, const std::wstring& text) {
+    DlgBuilder b;
+    b.Begin(title, 340, 280, 2);
+    b.Item(ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | WS_TABSTOP, 7, 7, 326, 247, 101, 0x81, L"");
+    b.Item(BS_DEFPUSHBUTTON | WS_TABSTOP, 283, 259, 50, 14, IDOK, 0x80, L"OK");
+    // Edit controls want CRLF line breaks.
+    std::wstring crlf;
+    for (wchar_t c : text) {
+        if (c == L'\n') crlf += L'\r';
+        crlf += c;
+    }
+    DialogBoxIndirectParamW(GetModuleHandleW(nullptr), b.Get(), owner, TextProc, (LPARAM)crlf.c_str());
+}

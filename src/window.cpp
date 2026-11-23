@@ -3,6 +3,7 @@
 #include "controls.h"
 #include "dialogs.h"
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <algorithm>
 #include <cmath>
 
@@ -10,14 +11,6 @@ namespace {
 
 enum : UINT {
     kTimerUi = 1, kTimerIdle = 2, kTimerThumbs = 3, kTimerStats = 4, kTimerFindChild = 5, kTimerBenchExit = 9,
-};
-enum : UINT {
-    kCmdAction = 1000,  // + Act
-    kCmdAudio = 2000,   // + track id
-    kCmdSub = 3000,     // + track id (3000 = off)
-    kCmdRecent = 4000,  // + index
-    kCmdChapter = 5000, // + index
-    kCmdTrayOpen = 6000, kCmdTrayShow, kCmdTrayExit, kCmdLoadSub, kCmdOpenFolder, kCmdSpeed = 6100,
 };
 
 struct TrackInfo {
@@ -155,6 +148,7 @@ void App::CreateWindows(bool startHidden) {
     RegisterClassExW(&vc);
 
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
+    taskbarButtonMsg_ = RegisterWindowMessageW(L"TaskbarButtonCreated");
     onTop_ = s_.onTop;
     captionOn_ = s_.showCaption;
     controlsOn_ = s_.showControls;
@@ -469,7 +463,17 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         if (trayIcon_) { trayIcon_ = false; AddTray(); }
         return 0;
     }
+    if (m == taskbarButtonMsg_ && taskbarButtonMsg_) {
+        OnTaskbarButtonCreated();
+        return 0;
+    }
     switch (m) {
+    case WM_APP_CLIP_DONE:
+        OnClipDone(w != 0, (std::wstring*)l);
+        return 0;
+    case WM_COMMAND:
+        if (HIWORD(w) == 0x1800 /* THBN_CLICKED */) ExtraMenuCommand(LOWORD(w));
+        return 0;
     case WM_APP_MPV:
         DrainEvents();
         return 0;
@@ -516,6 +520,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
                     RefreshBar();
                 }
             }
+            UpdateTaskbar(false);
             return 0;
         case kTimerIdle:
             UpdateCursor();
@@ -524,6 +529,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         case kTimerThumbs:
             KillTimer(hwnd_, kTimerThumbs);
             StartThumbnails();
+            InitTaskbar();  // COM + taskbar buttons once playback has settled, never on the start-up path
             return 0;
         case kTimerStats:
             if (statsOn_) {  // re-show with fresh values
@@ -625,18 +631,28 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_DROPFILES: {
+        // Subtitle files load into the current video; media files play (several = playlist; Shift = append).
         HDROP drop = (HDROP)w;
-        wchar_t path[MAX_PATH * 4];
-        if (DragQueryFileW(drop, 0, path, (UINT)std::size(path))) {
+        std::vector<std::wstring> media;
+        UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        for (UINT i = 0; i < n; i++) {
+            wchar_t path[MAX_PATH * 4];
+            if (!DragQueryFileW(drop, i, path, (UINT)std::size(path))) continue;
             std::wstring p = path, ext = util::Lower(p.substr(p.find_last_of(L'.') + 1));
             if (ext == L"srt" || ext == L"ass" || ext == L"ssa" || ext == L"vtt" || ext == L"sub" || ext == L"sup") {
                 std::string p8 = util::Utf8(p);
                 mpvx::CmdAsync(mpv_, {"sub-add", p8.c_str(), "select"});
             } else {
-                Open(p);
+                media.push_back(p);
             }
         }
         DragFinish(drop);
+        bool append = GetKeyState(VK_SHIFT) < 0 && !path_.empty();
+        if (append && plist_.empty()) {
+            plist_ = {path_};
+            plPos_ = 0;
+        }
+        if (!media.empty()) OpenFiles(media, append);
         return 0;
     }
     case WM_COPYDATA: {
@@ -653,7 +669,14 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         if (inTray_) ShowFromTray();
         else if (IsIconic(hwnd_)) ShowWindow(hwnd_, SW_RESTORE);
         if (!util::TestMode()) SetForegroundWindow(hwnd_);
-        if (!p.empty()) Open(p);
+        std::vector<std::wstring> files;
+        for (size_t pos = 0; pos < p.size();) {
+            size_t nl = p.find(L'\n', pos);
+            if (nl == std::wstring::npos) nl = p.size();
+            if (nl > pos) files.push_back(p.substr(pos, nl - pos));
+            pos = nl + 1;
+        }
+        if (!files.empty()) OpenFiles(files, false);
         return TRUE;
     }
     case WM_ACTIVATEAPP:
@@ -688,7 +711,7 @@ void App::SeekRelative(double secs, const char* flags) {
 }
 
 void App::SetVolume(int v) {
-    v = std::clamp(v, 0, 100);
+    v = std::clamp(v, 0, s_.volumeMax);
     s_.volume = v;
     mpvx::SetDouble(mpv_, "volume", v);
     bar_.volume = v;
@@ -834,11 +857,24 @@ void App::RunCommand(const std::wstring& cmd) {
         HoverSeek(_wtof(arg.c_str()), {(br.left + br.right) / 2, br.top});
     } else if (verb == L"open") {
         Open(arg);
+    } else if (verb == L"clip") {
+        if (!FindFfmpeg().empty() && bar_.abA >= 0 && bar_.abB > bar_.abA) StartClip(arg, FindFfmpeg());
+    } else if (verb == L"menu") {
+        OnMenuCommand((UINT)_wtoi(arg.c_str()));
+    } else if (verb == L"get") {
+        util::TimingLog(("property " + util::Utf8(arg) + " = " + mpvx::GetStr(mpv_, util::Utf8(arg).c_str())).c_str());
+    } else if (verb == L"state") {
+        char b[256];
+        snprintf(b, sizeof b, "state: playlist %d/%d, after %d, volume %d/%d, path %s", plPos_, (int)plist_.size(),
+                 s_.afterPlayback, bar_.volume, bar_.volumeMax, util::Utf8(util::FileName(path_)).c_str());
+        util::TimingLog(b);
     }
 }
 
 void App::DoAction(Act a) {
-    if (!mpv_ && a != Act::Exit && a != Act::Open && a != Act::Menu && a != Act::EditSettings) return;
+    if (!mpv_ && a != Act::Exit && a != Act::Open && a != Act::Menu && a != Act::EditSettings && a != Act::Playlist &&
+        a != Act::OpenUrl && a != Act::Help)
+        return;
     const char* relFlags = s_.exactSeek ? "relative+exact" : "relative";
     switch (a) {
     case Act::PlayPause:
@@ -900,14 +936,15 @@ void App::DoAction(Act a) {
     case Act::SubDelayDown: mpvx::CmdAsync(mpv_, {"osd-msg", "add", "sub-delay", "-0.1"}); break;
     case Act::NextChapter:
     case Act::PrevChapter:
+        // MPC-HC: chapters first, then the playlist, then the folder.
         if (!bar_.chapters.empty()) mpvx::CmdAsync(mpv_, {"osd-msg", "add", "chapter", a == Act::NextChapter ? "1" : "-1"});
-        else StepFile(a == Act::NextChapter ? 1 : -1);
+        else if (!StepPlaylist(a == Act::NextChapter ? 1 : -1)) StepFile(a == Act::NextChapter ? 1 : -1);
         break;
-    case Act::NextFile: StepFile(1); break;
-    case Act::PrevFile: StepFile(-1); break;
+    case Act::NextFile: if (!StepPlaylist(1)) StepFile(1); break;
+    case Act::PrevFile: if (!StepPlaylist(-1)) StepFile(-1); break;
     case Act::Open: {
-        std::wstring f = PickOpenFile(hwnd_, path_.empty() ? L"" : util::DirName(path_));
-        if (!f.empty()) Open(f);
+        auto files = PickOpenFiles(hwnd_, path_.empty() ? L"" : util::DirName(path_));
+        if (!files.empty()) OpenFiles(files, false);
         break;
     }
     case Act::Close: CloseFile(); break;
@@ -977,7 +1014,7 @@ void App::DoAction(Act a) {
         ShowContextMenu(p);
         break;
     }
-    default: break;
+    default: ExtraAction(a); break;
     }
 }
 
@@ -1085,6 +1122,7 @@ void App::BuildMenu(HMENU m) {
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
     item(view, Act::Stats, statsOn_, f);
     AppendMenuW(m, MF_POPUP, (UINT_PTR)view, L"View");
+    BuildExtraMenus(m, play, view, audio, subs);  // MPC-HC extras: after playback, aspect, devices, tools, help
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
 
     item(m, Act::ScreenshotSave, false, f);
@@ -1106,6 +1144,7 @@ void App::ShowContextMenu(POINT screen) {
 }
 
 void App::OnMenuCommand(UINT id) {
+    if (ExtraMenuCommand(id)) return;
     if (id >= kCmdAction && id < kCmdAction + (UINT)Act::Count) {
         DoAction((Act)(id - kCmdAction));
     } else if (id >= kCmdAudio && id < kCmdSub) {
@@ -1174,7 +1213,7 @@ void App::HideToTray() {
     RetireThumbnails();
     if (mpv_) mpvx::Cmd(mpv_, {"stop"});  // releases the file; libmpv and the GPU output stay warm
     path_.clear();
-    bar_ = BarState{false, true, bar_.mute, bar_.remaining, 0, 0, 1, -1, -1, bar_.volume, {}};
+    bar_ = BarState{false, true, bar_.mute, bar_.remaining, 0, 0, 1, -1, -1, bar_.volume, bar_.volumeMax, {}};
     UpdateTitle();
     ShowWindow(hwnd_, SW_HIDE);
     inTray_ = true;
@@ -1245,6 +1284,23 @@ void App::Quit() {
         g_mpv.mpv_terminate_destroy(mpv_);
         mpv_ = nullptr;
     }
+    if (clipProcess_) {
+        // An unfinished clip export: stop ffmpeg and remove its partial output.
+        TerminateProcess(clipProcess_, 1);
+        if (clipThread_.joinable()) clipThread_.join();
+        CloseHandle(clipProcess_);
+        clipProcess_ = nullptr;
+        DeleteFileW(clipOut_.c_str());
+    }
+    if (clipThread_.joinable()) clipThread_.join();
+    if (taskbar_) {
+        taskbar_->Release();
+        taskbar_ = nullptr;
+    }
+    for (auto& ic : tbIcons_)
+        if (ic) DestroyIcon(ic), ic = nullptr;
+    if (comInit_) CoUninitialize();
+    if (plWnd_) DestroyWindow(plWnd_);
     RemoveTray();
     DestroyWindow(hwnd_);
 }

@@ -33,6 +33,10 @@ private:
     App* app_ = nullptr;
     int dpi_ = 96;
     HFONT font_ = nullptr;
+    HWND tip_ = nullptr;          // button tooltips, created on first hover (keeps comctl32 off the start-up path)
+    void EnsureTips();
+    void UpdateTipRects();
+    std::wstring TipText(int part);
     bool overlay_ = false;
     Part hot_ = Part::None, dragging_ = Part::None;
     int hoverX_ = -1;

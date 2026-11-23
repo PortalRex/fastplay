@@ -489,7 +489,10 @@ static BOOL CALLBACK GrabFind(HWND h, LPARAM l) {
     wchar_t cls[64];
     GetWindowThreadProcessId(h, &pid);
     GetClassNameW(h, cls, 64);
-    if (pid == c->pid && !wcscmp(cls, c->cls) && IsWindowVisible(h)) { c->found = h; return FALSE; }
+    RECT r;
+    GetWindowRect(h, &r);
+    bool any = !wcscmp(c->cls, L"*") && r.right - r.left >= 200 && !GetWindow(h, GW_OWNER);  // "*": main window
+    if (pid == c->pid && (any || !wcscmp(cls, c->cls)) && IsWindowVisible(h)) { c->found = h; return FALSE; }
     return TRUE;
 }
 

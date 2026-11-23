@@ -50,6 +50,34 @@ the pre-warm itself takes as long as the device libmpv would have created.
 - Resume position per file, keyed by path + size + modification time (never a content hash), in
   `%APPDATA%\FastPlay\history.txt`; it doubles as the Recent list.
 - Media keys (play/pause, stop, next/previous).
+- **Playlist** (Ctrl+7): open or drop several files (Shift+drop appends, dropping onto the playlist window appends),
+  double-click / Enter plays, Delete removes; Next/Previous go chapters → playlist → folder, as in MPC-HC.
+  **After playback**: do nothing, play next file, repeat file, close, exit.
+- **Video**: aspect ratio override (4:3, 16:9, 1.85, 2.35, 21:9, 1:1), rotate (Alt+Num4/6), mirror, flip,
+  deinterlace (Ctrl+Shift+D), brightness / contrast / saturation. Mirror and flip are software filters, so while one
+  is on the decoder switches to copy-back mode by itself and goes back to zero-copy when both are off.
+- **Audio**: output device menu, volume boost up to 150 / 200 %, normalize (dynaudnorm).
+- **Subtitles**: bigger/smaller, up/down, load external file.
+- **Taskbar**: progress on the taskbar button and Previous / Play-Pause / Next buttons in its thumbnail (set up after
+  the first frame, so COM never touches start-up).
+- **Open URL** (Ctrl+U) for direct media and stream URLs (no youtube-dl).
+- **Register as video player** (Tools menu): per-user registration so FastPlay shows under *Open with* and in
+  Windows' Default apps, where you can make it the default; *Remove file type registration* undoes it.
+- **Help → Keyboard shortcuts** (Ctrl+F1) lists every action with its keys; control-bar buttons have tooltips.
+
+## FastCut
+
+- **Edit in FastCut** (Ctrl+E): opens the file in [FastCut](https://github.com/PortalRex/fastcut) at the current
+  position, with the A-B loop (if set) as a selected segment (`FastCut.exe <file> --seek=S --segment=A,B`). FastCut is
+  found next to fastplay.exe, in `..\FastCut\`, in a side-by-side `fastcut\dist` checkout, or at `fastcut_path`.
+- **Save clip (lossless)** (Ctrl+Shift+S): writes the A-B range with `ffmpeg -c copy` in the background (ffmpeg from
+  PATH or `ffmpeg_path`). The clip starts on the keyframe at or before A. It uses FastPlay's own keyframe index plus
+  `-copyts` and an output-side cut, so fragmented OBS files skip the slow fragment scan and the clip doesn't start a
+  fragment early (checked: a 10.0 s A-B range gave a 10.1 s clip starting on the keyframe; a partial file is removed
+  on failure or exit). For frame-exact cuts use FastCut.
+
+FastCut stays its own program: it's a C# editor (timeline, segments, smart cut, export queue), and merging it into
+this C++ player would mean rewriting it. The two hand over to each other instead.
 
 ## Default keys (MPC-HC)
 
@@ -60,6 +88,10 @@ the pre-warm itself takes as long as the device libmpv would have created.
 | Alt+Right / Alt+Left | Jump 20 s | Shift+Right / Shift+Left | Next / previous keyframe |
 | Home | Go to start | Ctrl+G | Go to... |
 | Ctrl+Up / Ctrl+Down / Ctrl+R | Faster / slower / normal speed | Num+ / Num- | Audio delay ±10 ms |
+| Ctrl+7 | Playlist | Ctrl+U | Open URL |
+| Alt+Num6 / Alt+Num4 | Rotate | Ctrl+Shift+D | Deinterlace |
+| Ctrl+E | Edit in FastCut | Ctrl+Shift+S | Save A-B clip (lossless) |
+| Ctrl+F1 | Shortcut list | | |
 | F2 / F1 | Subtitle delay ± | PageDown / PageUp | Next / previous chapter (or file) |
 | Ctrl+PageDown / Ctrl+PageUp | Next / previous file | Ctrl+O | Open |
 | Ctrl+C | Close | Alt+X | Exit |
@@ -82,7 +114,7 @@ with every setting and key binding listed. **O** opens it in Notepad; changes ap
 | Setting | Default | |
 |---|---|---|
 | `single_instance` | 1 | Hand new files to the running player |
-| `tray` | 0 | Closing hides to the tray and keeps libmpv warm (faster next open, ~180 MB stays resident) |
+| `tray` | 0 | Closing hides to the tray and keeps libmpv warm: ~100 ms to first frame, ~125 MB working set while idle |
 | `remember_position` | 1 | Resume where you left off |
 | `autofit` / `autofit_percent` | 1 / 75 | Size the window to the video at 75 % of the screen (MPC-HC auto-fit) |
 | `exact_seek` | 0 | Keyboard jumps land on exact frames instead of keyframes |
@@ -95,6 +127,10 @@ with every setting and key binding listed. **O** opens it in Notepad; changes ap
 | `hwdec`, `vo` | d3d11va, gpu-next | |
 | `screenshot_dir`, `screenshot_format` | Pictures\FastPlay, png | |
 | `mpv_options` | | Extra mpv options: `name=value;name=value` |
+| `after_playback` | 0 | 0 nothing, 1 next file, 2 repeat, 3 close, 4 exit |
+| `volume_max` | 100 | 150 or 200 for boost |
+| `taskbar_progress` | 1 | Taskbar progress and thumbnail buttons |
+| `fastcut_path`, `ffmpeg_path` | | Override where FastCut / ffmpeg are found |
 
 ## Build
 
@@ -107,15 +143,19 @@ Needs Visual Studio 2019 or newer (C++ workload) and the Windows 10/11 SDK.
 Source map: `app.cpp` start-up, libmpv set-up, loading, events · `window.cpp` window, input, actions, menus,
 fullscreen, tray · `controls.cpp` owner-drawn control bar and thumbnail popup · `mp4index.cpp` MP4 header index
 (ported from FastCut's `Mp4Index.cs`, extended for fragmented MP4) · `thumbs.cpp` thumbnail decoder · `keys.cpp`
-actions and MPC-HC default bindings · `settings.cpp` ini, settings, resume store.
+actions and MPC-HC default bindings · `settings.cpp` ini, settings, resume store · `features.cpp` playlist,
+after playback, video/audio extras, taskbar, file types, FastCut and clip export, help · `dialogs.cpp` small dialogs.
 
 ## Testing and scripting
 
 - `FASTPLAY_TEST=1`: the window opens off every screen, muted, never activated, with its own instance and no
   writes to settings or history. `FASTPLAY_TIMING=<file>` appends start-up milestones (ms since process creation).
   `FASTPLAY_MPV_OPTS="name=value;..."` passes extra mpv options. `--start=SECONDS`, `--bench-exit`.
-- `tools\fpctl.ps1 -ProcessId <pid> -Command "action <id>" | "seek <s>" | "hover <s>" | "open <path>"` drives a
-  running player over `WM_COPYDATA` (no simulated input). `tools\run-test.ps1` and `tools\seektest.ps1` use it.
+- `tools\fpctl.ps1 -ProcessId <pid> -Command "action <id>" | "seek <s>" | "hover <s>" | "open <path>" |
+  "menu <id>" | "clip <out>" | "get <property>" | "state"` drives a running player over `WM_COPYDATA` (no simulated
+  input; `get`/`state` write to the `FASTPLAY_TIMING` log). `-Shot <png> [-Class <window class>]` saves a PrintWindow
+  image. `tools\run-test.ps1` and `tools\seektest.ps1` use it. `FASTPLAY_INSTANCE=<name>` gives a test run its own
+  single-instance name (used to benchmark the warm tray instance).
 - `tools\bench\fpbench.exe`: player-agnostic time-to-first-frame (below). `--grab <pid> <class> <out.bmp>` saves a
   Windows.Graphics.Capture still of a window, off-screen ones included.
 
@@ -147,8 +187,11 @@ Honest notes:
 - FastPlay's cold and warm times are about the same because its open reads only three small regions; what's left
   is per-process start-up: ~25 ms to `main`, libmpv load ~20 ms, and the first D3D11 device ~170-250 ms (NVIDIA
   driver initialisation), then decoder set-up and the first frame. Only the warm tray instance avoids it.
-- **Playback CPU is higher than MPC-HC's** (7-10 % vs 2.2 % of one core). Not output related (`vo=gpu`,
-  `profile=fast`, no deband/dither, no audio, bigger stream buffers all measured the same); not profiled yet.
+- **Playback CPU is higher than MPC-HC's** (7-10 % vs 2.2 % of one core, i.e. ~0.5 % vs ~0.15 % of this 16-thread
+  CPU). Measured with each of these and none lowered it: thumbnails off, no audio, `vo=gpu`, `profile=fast`, no
+  deband/dither, smaller or bigger demuxer buffers, a 30 s steady-state window, `d3d11-sync-interval=0`, Vulkan (11 %,
+  and a 2.2 s first frame), NVDEC copy-back (14 %); d3d11va copy-back doubles it (16-20 %). So it's mpv's own
+  playback loop on zero-copy d3d11va, which is already the cheapest path found.
 - MPC-HC test copies took the foreground at start-up even with `/nofocus` and without inherited foreground rights
   (activating a hidden modeless dialog). fpbench therefore launches every player under a debugger and patches the
   user32/win32u focus and input exports before any player code runs (see `PatchFocusAndDetach`), with

@@ -26,14 +26,15 @@ void WakeupCallback(void* d) { PostMessageW((HWND)d, WM_APP_MPV, 0, 0); }
 
 int App::Run(HINSTANCE inst, const std::vector<std::wstring>& args) {
     inst_ = inst;
-    std::wstring file;
+    std::vector<std::wstring> files;
     bool startInTray = false;
     for (const auto& a : args) {
         if (a == L"--tray") startInTray = true;
         else if (a == L"--bench-exit") benchExit_ = true;
         else if (a.rfind(L"--start=", 0) == 0) startOverride_ = _wtof(a.c_str() + 8);
-        else if (!a.empty() && a[0] != L'-') file = util::FullPath(a);
+        else if (!a.empty() && a[0] != L'-') files.push_back(a.find(L"://") != std::wstring::npos ? a : util::FullPath(a));
     }
+    std::wstring file = files.empty() ? L"" : files[0];
 
     iniPath_ = util::DataDir() + L"\\fastplay.ini";
     ini_.Load(iniPath_);
@@ -41,18 +42,27 @@ int App::Run(HINSTANCE inst, const std::vector<std::wstring>& args) {
     if (GetFileAttributesExW(iniPath_.c_str(), GetFileExInfoStandard, &fa)) iniTime_ = fa.ftLastWriteTime;
     s_.Load(ini_);
     keys_.Load(ini_);
+    bar_.volume = s_.volume;
+    bar_.volumeMax = s_.volumeMax;
     if (startInTray) s_.tray = true;  // started as the warm instance: closing goes back to the tray
 
     // Single instance: hand the file to the running player and leave. Test runs always get their own instance.
     if (s_.singleInstance && (!util::TestMode() || !util::InstanceSuffix().empty())) {
         std::wstring mutexName = L"Local\\FastPlay.SingleInstance" + util::InstanceSuffix();
         instanceMutex_ = CreateMutexW(nullptr, FALSE, mutexName.c_str());
-        if (GetLastError() == ERROR_ALREADY_EXISTS && HandOffToRunningInstance(file)) return 0;
+        bool another = GetLastError() == ERROR_ALREADY_EXISTS;
+        std::wstring all;  // several files go over as one newline-separated message (the receiver makes a playlist)
+        for (const auto& f : files) all += (all.empty() ? L"" : L"\n") + f;
+        if (another && HandOffToRunningInstance(all)) return 0;
     }
     util::TimingLog("start");
 
     if (!util::TestMode()) resume_.Load(util::DataDir() + L"\\history.txt");
     hwndReady_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (files.size() > 1) {
+        plist_ = files;
+        plPos_ = 0;
+    }
     if (!file.empty()) {
         pendingStart_ = PrepareOpen(file);  // also starts the header prefetch
         std::lock_guard<std::mutex> l(pendingMu_);
@@ -94,7 +104,7 @@ void App::SetMpvOptions(mpv_handle* h) {
     std::wstring cache = util::LocalCacheDir() + L"\\shaders";
     CreateDirectoryW(cache.c_str(), nullptr);
     std::string cache8 = util::Utf8(cache);
-    std::string vol = std::to_string(s_.volume);
+    std::string vol = std::to_string(s_.volume), volMax = std::to_string(s_.volumeMax);
     std::string hwdec = util::Utf8(s_.hwdec), vo = util::Utf8(s_.vo);
     std::wstring shotDir = s_.screenshotDir;
     if (shotDir.empty()) {
@@ -121,7 +131,7 @@ void App::SetMpvOptions(mpv_handle* h) {
         // timestamps identical to the default path for OBS files (checked packet by packet).
         {"demuxer-lavf-o", "use_mfra_for=pts"},
         {"audio-file-auto", "no"}, {"cover-art-auto", "no"}, {"sub-auto", "exact"},
-        {"volume", vol.c_str()}, {"volume-max", "100"}, {"mute", (s_.mute || util::TestMode()) ? "yes" : "no"},
+        {"volume", vol.c_str()}, {"volume-max", volMax.c_str()}, {"loop-file", s_.afterPlayback == 2 ? "inf" : "no"}, {"mute", (s_.mute || util::TestMode()) ? "yes" : "no"},
         {"audio-pitch-correction", "yes"}, {"audio-client-name", "FastPlay"},
         {"osd-on-seek", "msg"}, {"osd-duration", "1200"}, {"osd-font-size", "30"}, {"osd-border-size", "2"},
         {"screenshot-directory", shot8.c_str()}, {"screenshot-format", fmt8.c_str()},
@@ -219,7 +229,7 @@ double App::PrepareOpen(const std::wstring& path) {
     indexReady_ = false;
     index_ = MediaIndex{};
     vidW_ = vidH_ = 0;
-    bar_ = BarState{bar_.hasFile, true, bar_.mute, bar_.remaining, 0, 0, bar_.speed, -1, -1, bar_.volume, {}};
+    bar_ = BarState{bar_.hasFile, true, bar_.mute, bar_.remaining, 0, 0, bar_.speed, -1, -1, bar_.volume, bar_.volumeMax, {}};
     bar_.hasFile = true;
     panX_ = panY_ = zoom_ = 0;
 
@@ -251,8 +261,18 @@ void App::IssueLoad(mpv_handle* h, const std::wstring& path, double start) {
 }
 
 void App::Open(const std::wstring& rawPath) {
-    std::wstring path = util::FullPath(rawPath);
+    std::wstring path = rawPath.find(L"://") != std::wstring::npos ? rawPath : util::FullPath(rawPath);
+    // A file that's in the playlist plays as that entry; anything else replaces the playlist (single files then
+    // navigate their folder, like MPC-HC).
+    auto it = std::find_if(plist_.begin(), plist_.end(), [&](const std::wstring& p) { return util::Lower(p) == util::Lower(path); });
+    if (it != plist_.end()) plPos_ = (int)(it - plist_.begin());
+    else {
+        plist_.clear();
+        plPos_ = -1;
+    }
+    eofHandled_ = false;
     double start = PrepareOpen(path);
+    RefreshPlaylistWindow();
     if (!mpv_) {
         std::lock_guard<std::mutex> l(pendingMu_);
         pendingFile_ = path;
@@ -280,7 +300,7 @@ void App::CloseFile() {
     RetireThumbnails();
     mpvx::Cmd(mpv_, {"stop"});
     path_.clear();
-    bar_ = BarState{false, true, bar_.mute, bar_.remaining, 0, 0, bar_.speed, -1, -1, bar_.volume, {}};
+    bar_ = BarState{false, true, bar_.mute, bar_.remaining, 0, 0, bar_.speed, -1, -1, bar_.volume, bar_.volumeMax, {}};
     UpdateTitle();
     RefreshBar();
 }
@@ -497,7 +517,14 @@ void App::OnProperty(mpv_event_property* p) {
         idle_ = flag();
         if (idle_) bar_.hasFile = false;
     } else if (!strcmp(p->name, "eof-reached")) {
-        // keep-open: stays on the last frame like MPC-HC
+        // keep-open stops on the last frame; then the playlist / "after playback" decides what happens.
+        bool eof = flag();
+        if (eof && !eofHandled_ && bar_.hasFile) {
+            eofHandled_ = true;
+            OnEndOfFile();
+        } else if (!eof) {
+            eofHandled_ = false;
+        }
     }
     if (!idle_ && !path_.empty()) bar_.hasFile = true;
     RefreshBar();
