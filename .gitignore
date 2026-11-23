@@ -1,0 +1,9 @@
+/build/
+/dist/
+/bench/
+third_party/mpv/libmpv-2.dll
+third_party/mpv/libmpv.dll.a
+tools/bench/*.exe
+*.obj
+*.pdb
+*.res
