@@ -550,7 +550,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         if (editor_ && editor_->OnAppMessage(m, w, l)) return 0;
         switch (w) {
         case kTimerUi:
-            if (mpv_ && bar_.hasFile && IsWindowVisible(hwnd_) && !IsIconic(hwnd_)) {
+            if (mpv_ && bar_.hasFile && IsWindowVisible(hwnd_) && !IsIconic(hwnd_) && !SeekHeld()) {
                 double p = mpvx::GetDouble(mpv_, "time-pos", bar_.pos);
                 if (p != bar_.pos) {
                     double was = bar_.pos;
@@ -742,7 +742,24 @@ void App::SeekTo(double t, bool exact) {
     snprintf(ts, sizeof ts, "%.3f", t);
     mpvx::CmdAsync(mpv_, {"seek", ts, exact ? "absolute+exact" : "absolute+keyframes"});
     bar_.pos = t;
+    seekHoldPos_ = t;
+    seekHoldExact_ = exact;
+    seekHoldUntil_ = GetTickCount() + 2000;  // safety net: never hold longer than this
     RefreshBar();
+}
+
+bool App::SeekHeld() {
+    if (seekHoldPos_ < 0) return false;
+    if ((int)(GetTickCount() - seekHoldUntil_) >= 0) { seekHoldPos_ = -1; return false; }
+    return true;
+}
+
+// Called on playback-restart (a seek finished) with the new time-pos. A keyframe seek is done at its first restart
+// (it lands on the keyframe before the target); an exact one only once mpv is at the target, since restarts of
+// earlier keyframe seeks from the same drag can still arrive first.
+void App::ReleaseSeekHold(double pos) {
+    if (!SeekHeld()) return;
+    if (!seekHoldExact_ || std::fabs(pos - seekHoldPos_) < 0.5) seekHoldPos_ = -1;
 }
 
 void App::SeekRelative(double secs, const char* flags) {

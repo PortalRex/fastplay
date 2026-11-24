@@ -259,6 +259,13 @@ private:
     double scaleX_ = 1, scaleY_ = 1;  // MPC-HC's "stretch" (Num4/6/8/2): mpv video-scale-x / -y
     bool osdTime_ = false;
     double exactSeekAfterOpen_ = -1;  // Reopen: exact seek once the file shows its first frame
+    // The seekbar shows a seek's target until mpv gets there, so late time-pos values from earlier (keyframe) seeks
+    // don't pull the playhead back while scrubbing.
+    double seekHoldPos_ = -1;
+    bool seekHoldExact_ = false;
+    DWORD seekHoldUntil_ = 0;
+    bool SeekHeld();
+    void ReleaseSeekHold(double pos);
     std::vector<std::string> audioDevNames_;
 
     // Lossless clip export (ffmpeg -c copy)

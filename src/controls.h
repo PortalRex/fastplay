@@ -45,6 +45,7 @@ private:
     int hoverX_ = -1;
     RECT seek_ = {}, play_ = {}, stop_ = {}, prev_ = {}, next_ = {}, step_ = {}, time_ = {}, mute_ = {}, vol_ = {};
     double lastDragSeek_ = -1;
+    double dragPos_ = -1;         // while dragging the seekbar: the time under the cursor (drawn instead of mpv's)
     DWORD lastDragTick_ = 0;
 };
 

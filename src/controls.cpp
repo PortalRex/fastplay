@@ -195,6 +195,11 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         }
         if (dragging_ == Part::Seek) {
             double t = SeekTimeAt(p.x);
+            if (t >= 0 && t != dragPos_) {
+                dragPos_ = t;
+                Invalidate();
+                UpdateWindow(hwnd_);  // paint now: mouse moves keep the queue busy, so WM_PAINT would trail the cursor
+            }
             DWORD now = GetTickCount();
             // Keyframe seeks while dragging (fast scrubbing); throttled so mpv isn't flooded on slow disks.
             if (t >= 0 && t != lastDragSeek_ && now - lastDragTick_ >= 30) {
@@ -231,6 +236,7 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
             double t = SeekTimeAt(p.x);
             if (t >= 0) {
                 dragging_ = Part::Seek;
+                dragPos_ = t;
                 SetCapture(hwnd_);
                 app_->SeekTo(t, false);
                 lastDragSeek_ = t;
@@ -261,11 +267,15 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
             if (t >= 0) app_->SeekTo(t, true);  // land exactly where released
         }
         dragging_ = Part::None;
+        dragPos_ = -1;
         ReleaseCapture();
         return 0;
     }
     case WM_CAPTURECHANGED:
-        if (!util::KeepDragOnCaptureLoss()) dragging_ = Part::None;
+        if (!util::KeepDragOnCaptureLoss()) {
+            dragging_ = Part::None;
+            dragPos_ = -1;
+        }
         return 0;
     case WM_MOUSEWHEEL:
         app_->DoAction(GET_WHEEL_DELTA_WPARAM(w) > 0 ? Act::VolUp : Act::VolDown);
@@ -351,6 +361,7 @@ bool ControlBar::PosChangesPixels(double a, double b) const {
 
 void ControlBar::Paint(HDC dc, const RECT& rc) {
     const BarState& b = app_->Bar();
+    const double pos = dragging_ == Part::Seek && dragPos_ >= 0 ? dragPos_ : b.pos;
     Fill(dc, rc, kBg);
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ oldFont = SelectObject(dc, font_);
@@ -368,7 +379,7 @@ void ControlBar::Paint(HDC dc, const RECT& rc) {
         Fill(dc, ab, RGB(90, 75, 30));
     }
     if (b.hasFile && b.dur > 0) {
-        RECT played = {l, track.top, xAt(b.pos), track.bottom};
+        RECT played = {l, track.top, xAt(pos), track.bottom};
         Fill(dc, played, kAccent);
     }
     for (double c : b.chapters) {
@@ -377,7 +388,7 @@ void ControlBar::Paint(HDC dc, const RECT& rc) {
     }
     if (b.abA >= 0) { RECT m1 = {xAt(b.abA), seek_.top, xAt(b.abA) + S(2), seek_.bottom}; Fill(dc, m1, kAb); }
     if (b.abB >= 0) { RECT m2 = {xAt(b.abB), seek_.top, xAt(b.abB) + S(2), seek_.bottom}; Fill(dc, m2, kAb); }
-    if (b.hasFile && b.dur > 0) Ellipse2(dc, xAt(b.pos), cy, hot_ == Part::Seek ? S(6) : S(5), kText);
+    if (b.hasFile && b.dur > 0) Ellipse2(dc, xAt(pos), cy, hot_ == Part::Seek ? S(6) : S(5), kText);
     if (hoverX_ >= 0) {
         RECT hl = {hoverX_, track.top - S(3), hoverX_ + std::max(1, S(1)), track.bottom + S(3)};
         Fill(dc, hl, kText);
@@ -415,7 +426,7 @@ void ControlBar::Paint(HDC dc, const RECT& rc) {
     SetTextColor(dc, kText);
     std::wstring tt;
     if (b.hasFile) {
-        tt = b.remaining ? L"-" + util::FormatTime(std::max(0.0, b.dur - b.pos)) : util::FormatTime(b.pos);
+        tt = b.remaining ? L"-" + util::FormatTime(std::max(0.0, b.dur - pos)) : util::FormatTime(pos);
         tt += L" / " + util::FormatTime(b.dur);
     }
     RECT trc = time_;

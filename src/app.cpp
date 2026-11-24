@@ -472,10 +472,12 @@ void App::DrainEvents() {
                     exactSeekAfterOpen_ = -1;
                 }
             }
-            bar_.pos = mpvx::GetDouble(mpv_, "time-pos", bar_.pos);
             {
+                double p = mpvx::GetDouble(mpv_, "time-pos", bar_.pos);
+                ReleaseSeekHold(p);
+                if (!SeekHeld()) bar_.pos = p;
                 char b[96];
-                snprintf(b, sizeof b, "playback restart at %.3f", bar_.pos);
+                snprintf(b, sizeof b, "playback restart at %.3f", p);
                 util::TimingLog(b);
             }
             RefreshBar();
