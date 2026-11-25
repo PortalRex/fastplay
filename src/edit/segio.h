@@ -10,6 +10,8 @@ std::vector<std::pair<std::wstring, std::wstring>> ParseTags(const std::wstring&
 
 // Autosaved segments for a file: <FastPlay data folder>\projects\<hash>.llc (FastCut's file naming).
 std::wstring AutosavePath(const std::wstring& mediaPath);
+// That <hash>: SHA-1 of the lower-cased full path, first 16 hex digits. Timeline markers use it too.
+std::wstring MediaKey(const std::wstring& mediaPath);
 // Where FastCut kept them (%APPDATA%\FastCut\projects, FASTCUT_HOME honoured). Only read, so segments saved before
 // Edit mode got its own folder still load.
 std::wstring LegacyAutosavePath(const std::wstring& mediaPath);

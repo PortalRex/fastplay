@@ -25,6 +25,7 @@ const COLORREF kLoadFill = RGB(56, 132, 255);
 const COLORREF kLoadText = RGB(170, 175, 185);
 const COLORREF kWhite = RGB(255, 255, 255);
 const COLORREF kBlack = RGB(0, 0, 0);
+const COLORREF kMarker = RGB(70, 200, 120);  // same green as the seekbar's markers
 
 const double kSteps[] = {0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200};
 
@@ -368,6 +369,7 @@ struct Timeline::Impl {
         DrawSegments();
         ShadeCutMode();
         if (tl.showKeyframes) DrawKeyframes();
+        DrawMarkers();
         if (tl.keyframeProgress >= 0) DrawLoading(SegTop(), SegH() + S(4), tl.keyframeProgress, L"Scanning keyframes");
 
         int rulerH = RulerH();
@@ -659,6 +661,25 @@ struct Timeline::Impl {
         for (; a != b; ++a) {
             int x = (int)std::floor(T2X(*a));
             canvas.Fill(x, top + S(1), x + lw, top + S(7), kWhite, 150);
+        }
+    }
+
+    // Timeline markers: a thin line through the rows with a small flag on the ruler's bottom edge, and the label
+    // beside the flag when there's room before the next marker.
+    void DrawMarkers() {
+        if (!tl.markers || tl.markers->empty()) return;
+        int rulerH = RulerH(), lw = std::max(1, S(1)), fw = S(7), fh = S(6);
+        const auto& ms = *tl.markers;
+        for (size_t i = 0; i < ms.size(); i++) {
+            float x = T2X(ms[i].t);
+            if (x < -fw || x > w + 2) continue;
+            int xi = (int)std::floor(x);
+            canvas.Fill(xi, rulerH - fh, xi + lw, h, kMarker, 170);
+            canvas.Fill(xi, rulerH - fh, xi + fw, rulerH - fh / 2, kMarker);
+            if (ms[i].label.empty()) continue;
+            float next = i + 1 < ms.size() ? T2X(ms[i + 1].t) : (float)w;
+            RECT r = {xi + fw + S(2), rulerH - fh - S(14), (LONG)std::min<float>(next - S(2), (float)w), rulerH - fh / 2};
+            if (r.right - r.left > S(24)) canvas.Text(smallFont, ms[i].label, r, kMarker, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     }
 

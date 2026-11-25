@@ -226,6 +226,8 @@ double App::PrepareOpen(const std::wstring& path) {
     SaveResume();
     RetireThumbnails();
     path_ = path;
+    if (path.find(L"://") == std::wstring::npos) markers_.Load(path);
+    else markers_.Clear();  // streams: markers only live until the next file
     fileSize_ = fileMtime_ = 0;
     ResumeStore::Stat(path, &fileSize_, &fileMtime_);
     loadSerial_++;
@@ -251,6 +253,7 @@ double App::PrepareOpen(const std::wstring& path) {
     if (!util::TestMode()) resume_.Put(path, fileSize_, fileMtime_, start);  // shows up in Recent right away
     StartPrefetch(path, start, loadSerial_);
     if (EditActive()) editor_->OnFileOpened(path);
+    if (editor_) editor_->MarkersChanged();
     if (hwnd_) {
         UpdateTitle();
         RefreshBar();
@@ -314,6 +317,8 @@ void App::CloseFile() {
     RetireThumbnails();
     mpvx::Cmd(mpv_, {"stop"});
     path_.clear();
+    markers_.Clear();
+    if (editor_) editor_->MarkersChanged();
     bar_ = BarState{false, true, bar_.mute, bar_.remaining, 0, 0, bar_.speed, -1, -1, bar_.volume, bar_.volumeMax, {}};
     UpdateTitle();
     RefreshBar();

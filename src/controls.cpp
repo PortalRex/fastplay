@@ -11,6 +11,8 @@ const COLORREF kDim = RGB(150, 150, 150);
 const COLORREF kTrack = RGB(70, 70, 70);
 const COLORREF kAccent = RGB(58, 142, 230);
 const COLORREF kAb = RGB(240, 190, 60);
+const COLORREF kMarker = RGB(70, 200, 120);
+const COLORREF kMarkerHot = RGB(150, 245, 180);
 
 void Fill(HDC dc, const RECT& r, COLORREF c) {
     SetDCBrushColor(dc, c);
@@ -136,6 +138,30 @@ double ControlBar::SeekTimeAt(int x) const {
     return f * b.dur;
 }
 
+int ControlBar::SeekX(double t) const {
+    const BarState& b = app_->Bar();
+    int l = seek_.left + S(4), r = seek_.right - S(4);
+    return b.dur > 0 ? l + (int)((r - l) * std::clamp(t / b.dur, 0.0, 1.0)) : l;
+}
+
+int ControlBar::MarkerAtX(int x) const {
+    if (app_->Bar().dur <= 0) return -1;
+    const auto& ms = app_->Markers();
+    int best = -1, bestD = S(5) + 1;
+    for (int i = 0; i < (int)ms.size(); i++) {
+        int d = std::abs(SeekX(ms[i].t) - x);
+        if (d < bestD) {
+            best = i;
+            bestD = d;
+        }
+    }
+    return best;
+}
+
+static std::wstring MarkerText(const std::vector<Marker>& ms, int i) {
+    return ms[i].label.empty() ? L"Marker " + std::to_wstring(i + 1) : ms[i].label;
+}
+
 int ControlBar::VolumeAt(int x) const {
     int l = vol_.left + S(4), r = vol_.right - S(4);
     return (int)std::lround(std::clamp((double)(x - l) / std::max(1, r - l), 0.0, 1.0) * app_->Bar().volumeMax);
@@ -188,12 +214,16 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         TrackMouseEvent(&t);
         Part hp = dragging_ != Part::None ? dragging_ : HitTest(p);
         int hx = hp == Part::Seek ? p.x : -1;
-        if (hp != hot_ || hx != hoverX_) {
+        // A press on a marker stays on it until the mouse really moves (then it's an ordinary drag).
+        if (dragging_ == Part::Seek && downMarker_ >= 0 && std::abs(p.x - downX_) > GetSystemMetrics(SM_CXDRAG)) downMarker_ = -1;
+        int hm = dragging_ == Part::Seek ? downMarker_ : hp == Part::Seek ? MarkerAtX(p.x) : -1;
+        if (hp != hot_ || hx != hoverX_ || hm != hoverMarker_) {
             hot_ = hp;
             hoverX_ = hx;
+            hoverMarker_ = hm;
             Invalidate();
         }
-        if (dragging_ == Part::Seek) {
+        if (dragging_ == Part::Seek && downMarker_ < 0) {
             double t = SeekTimeAt(p.x);
             if (t >= 0 && t != dragPos_) {
                 dragPos_ = t;
@@ -211,9 +241,12 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
             app_->SetVolume(VolumeAt(p.x));
         }
         if (hp == Part::Seek) {
-            POINT a = {p.x, seek_.top};
+            const auto& ms = app_->Markers();
+            bool onMarker = hm >= 0 && hm < (int)ms.size();
+            POINT a = {onMarker ? SeekX(ms[hm].t) : p.x, seek_.top};
             ClientToScreen(hwnd_, &a);
-            app_->HoverSeek(SeekTimeAt(p.x), a);
+            if (onMarker) app_->HoverSeek(ms[hm].t, a, MarkerText(ms, hm));
+            else app_->HoverSeek(SeekTimeAt(p.x), a);
         } else {
             app_->HoverSeek(-1, {});
         }
@@ -223,6 +256,7 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         if (dragging_ == Part::None) {
             hot_ = Part::None;
             hoverX_ = -1;
+            hoverMarker_ = -1;
             app_->HoverSeek(-1, {});
             Invalidate();
         }
@@ -233,7 +267,11 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         Part hp = HitTest(p);
         switch (hp) {
         case Part::Seek: {
-            double t = SeekTimeAt(p.x);
+            int mk = MarkerAtX(p.x);
+            const auto& ms = app_->Markers();
+            double t = mk >= 0 ? ms[mk].t : SeekTimeAt(p.x);
+            downMarker_ = mk;
+            downX_ = p.x;
             if (t >= 0) {
                 dragging_ = Part::Seek;
                 dragPos_ = t;
@@ -263,11 +301,16 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
     case WM_LBUTTONUP: {
         POINT p = {(short)LOWORD(l), (short)HIWORD(l)};
         if (dragging_ == Part::Seek) {
-            double t = SeekTimeAt(p.x);
-            if (t >= 0) app_->SeekTo(t, true);  // land exactly where released
+            if (downMarker_ >= 0) {
+                app_->GoToMarker(downMarker_);  // a click on a marker lands exactly on it
+            } else {
+                double t = SeekTimeAt(p.x);
+                if (t >= 0) app_->SeekTo(t, true);  // land exactly where released
+            }
         }
         dragging_ = Part::None;
         dragPos_ = -1;
+        downMarker_ = -1;
         ReleaseCapture();
         return 0;
     }
@@ -275,6 +318,7 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         if (!util::KeepDragOnCaptureLoss()) {
             dragging_ = Part::None;
             dragPos_ = -1;
+            downMarker_ = -1;
         }
         return 0;
     case WM_MOUSEWHEEL:
@@ -282,8 +326,10 @@ LRESULT ControlBar::On(UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_RBUTTONUP: {
         POINT p = {(short)LOWORD(l), (short)HIWORD(l)};
+        int mk = HitTest(p) == Part::Seek ? MarkerAtX(p.x) : -1;
         ClientToScreen(hwnd_, &p);
-        app_->ShowContextMenu(p);
+        if (mk >= 0) app_->MarkerMenu(mk, p);
+        else app_->ShowContextMenu(p);
         return 0;
     }
     case WM_MOUSEACTIVATE:
@@ -385,6 +431,20 @@ void ControlBar::Paint(HDC dc, const RECT& rc) {
     for (double c : b.chapters) {
         RECT tick = {xAt(c), track.top - S(3), xAt(c) + std::max(1, S(1)), track.top};
         Fill(dc, tick, kDim);
+    }
+    // Timeline markers: a stem through the track with a small flag above it.
+    if (b.hasFile && b.dur > 0) {
+        const auto& ms = app_->Markers();
+        int stem = std::max(1, S(2));
+        for (int i = 0; i < (int)ms.size(); i++) {
+            bool hotM = i == hoverMarker_;
+            COLORREF c = hotM ? kMarkerHot : kMarker;
+            int x = xAt(ms[i].t);
+            RECT st = {x - stem / 2, seek_.top, x - stem / 2 + stem, track.bottom + S(1)};
+            Fill(dc, st, c);
+            RECT flag = {x - stem / 2, seek_.top, x - stem / 2 + (hotM ? S(11) : S(9)), seek_.top + (hotM ? S(8) : S(6))};
+            Fill(dc, flag, c);
+        }
     }
     if (b.abA >= 0) { RECT m1 = {xAt(b.abA), seek_.top, xAt(b.abA) + S(2), seek_.bottom}; Fill(dc, m1, kAb); }
     if (b.abB >= 0) { RECT m2 = {xAt(b.abB), seek_.top, xAt(b.abB) + S(2), seek_.bottom}; Fill(dc, m2, kAb); }
@@ -493,7 +553,7 @@ bool ThumbPopup::Create(HINSTANCE inst, HWND owner) {
     return hwnd_ != nullptr;
 }
 
-void ThumbPopup::Show(std::shared_ptr<const Thumb> t, double time, POINT anchor, int dpi) {
+void ThumbPopup::Show(std::shared_ptr<const Thumb> t, double time, POINT anchor, int dpi, const std::wstring& label) {
     if (dpi != dpi_ || !font_) {
         dpi_ = dpi;
         if (font_) DeleteObject(font_);
@@ -501,9 +561,20 @@ void ThumbPopup::Show(std::shared_ptr<const Thumb> t, double time, POINT anchor,
     }
     thumb_ = std::move(t);
     time_ = time;
-    int pad = MulDiv(2, dpi_, 96), label = MulDiv(20, dpi_, 96);
+    label_ = label;
+    int pad = MulDiv(2, dpi_, 96), labelH = MulDiv(20, dpi_, 96);
     int w = thumb_ ? thumb_->w + 2 * pad : MulDiv(80, dpi_, 96);
-    int h = (thumb_ ? thumb_->h + pad : 0) + label;
+    if (!label_.empty()) {  // widen for a marker label, up to a sensible limit (longer ones end in "...")
+        HDC dc = GetDC(hwnd_);
+        HGDIOBJ of = SelectObject(dc, font_);
+        std::wstring s = util::FormatTime(time_) + L"   " + label_;
+        SIZE sz = {};
+        GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
+        SelectObject(dc, of);
+        ReleaseDC(hwnd_, dc);
+        w = std::max(w, std::min((int)sz.cx + MulDiv(16, dpi_, 96), MulDiv(420, dpi_, 96)));
+    }
+    int h = (thumb_ ? thumb_->h + pad : 0) + labelH;
     int x = anchor.x - w / 2, y = anchor.y - h - MulDiv(6, dpi_, 96);
     HMONITOR mon = MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = {sizeof mi};
@@ -546,6 +617,8 @@ LRESULT CALLBACK ThumbPopup::Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         Fill(dc, rc, RGB(16, 16, 16));
         int pad = MulDiv(2, self->dpi_, 96);
         int labelTop = pad;
+        // Centre the thumbnail when the popup was widened for a long marker label.
+        int tx = self->thumb_ ? std::max(0, (int)(rc.right - self->thumb_->w) / 2 - pad) : 0;
         if (auto& t = self->thumb_) {
             BITMAPINFO bi = {};
             bi.bmiHeader.biSize = sizeof bi.bmiHeader;
@@ -554,7 +627,7 @@ LRESULT CALLBACK ThumbPopup::Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             bi.bmiHeader.biPlanes = 1;
             bi.bmiHeader.biBitCount = 32;
             bi.bmiHeader.biCompression = BI_RGB;
-            SetDIBitsToDevice(dc, pad, pad, t->w, t->h, 0, 0, 0, t->h, t->px.data(), &bi, DIB_RGB_COLORS);
+            SetDIBitsToDevice(dc, pad + tx, pad, t->w, t->h, 0, 0, 0, t->h, t->px.data(), &bi, DIB_RGB_COLORS);
             labelTop = pad + t->h;
         }
         RECT lr = {0, labelTop, rc.right, rc.bottom};
@@ -562,7 +635,12 @@ LRESULT CALLBACK ThumbPopup::Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         SetTextColor(dc, kText);
         HGDIOBJ of = SelectObject(dc, self->font_);
         std::wstring s = util::FormatTime(self->time_);
-        DrawTextW(dc, s.c_str(), -1, &lr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (!self->label_.empty()) {
+            s += L"   " + self->label_;
+            SetTextColor(dc, kMarkerHot);
+            InflateRect(&lr, -MulDiv(6, self->dpi_, 96), 0);
+        }
+        DrawTextW(dc, s.c_str(), -1, &lr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         SelectObject(dc, of);
         EndPaint(h, &ps);
         return 0;

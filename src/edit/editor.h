@@ -47,6 +47,9 @@ public:
     std::wstring DebugState() const;                 // one line for test logs
     void SetOption(const std::wstring& key, const std::wstring& value);  // tests: cut_mode, merge, size_mb, format
     bool JobRunning() const { return jobRunning_; }
+    void JumpTo(double t) { Seek(t); }               // marker navigation (View-mode keys fall through)
+    double Position() const { return Pos(); }
+    void MarkersChanged();                           // App's marker list changed: redraw the timeline
 
     // TimelineThumbs
     std::shared_ptr<const Thumb> Get(double t, double tol) override;
@@ -90,6 +93,7 @@ private:
     // editactions.cpp: actions, keys, menus, segments, export, tools
     void RegisterActions();
     void LoadKeymap();
+    void MigrateKeyDefaults();
     void Run(const std::wstring& id);
     std::wstring KeyText(const std::wstring& id) const;
     void ShowMenu(const std::wstring& title, POINT screen);

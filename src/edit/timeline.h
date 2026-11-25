@@ -5,6 +5,7 @@
 #pragma once
 #include "common.h"
 #include "../thumbs.h"
+#include "../markers.h"
 #include <set>
 
 namespace edit {
@@ -52,6 +53,7 @@ public:
     int selected = -1;
     std::set<int>* marked = nullptr;
     std::vector<double> keyframes;
+    const std::vector<Marker>* markers = nullptr;  // FastPlay's timeline markers (owned by App)
     const float* wave = nullptr;
     size_t waveCount = 0;
     TimelineThumbs* thumbs = nullptr;

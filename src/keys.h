@@ -30,6 +30,8 @@ enum class Act : int {
     Reopen, Recycle, LoadSubtitles, OpenLocation, BossKey, OsdTime, OsdFilename, SubLinePrev, SubLineNext,
     SubShiftUp, SubShiftDown, Zoom25, ZoomAutofitLarger, WidthUp, WidthDown, HeightUp, HeightDown, PanUpLeft,
     PanUpRight, PanDownLeft, PanDownRight, PanCenter, ViewCompact,
+    // Timeline markers
+    AddMarker, DeleteMarker, RenameMarker, NextMarker, PrevMarker, ClearMarkers,
     Count
 };
 

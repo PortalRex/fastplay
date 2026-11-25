@@ -59,8 +59,17 @@ the pre-warm itself takes as long as the device libmpv would have created.
 - Resume position per file, keyed by path + size + modification time (never a content hash), in
   `%APPDATA%\FastPlay\history.txt`; it doubles as the Recent list.
 - Media keys (play/pause, stop, next/previous).
+- **Timeline markers** (like Steam game recording's): **M** drops a marker at the playhead, shown as a green flag on
+  the seekbar and in Edit mode's timeline. Hovering one shows its time and label; clicking near it lands exactly on
+  it; right-click it to label or delete it. **Shift+PageDown / Shift+PageUp** jump to the next / previous marker (a
+  highlight viewer), and PageDown / PageUp (mouse forward / back) step through markers before going to the next
+  file. The file's own chapters (OBS chapter markers, for example) count as markers for jumping. Alt+M labels the
+  marker at the playhead, Shift+M deletes it, and the right-click menu's *Markers* submenu lists them all. They are
+  saved per file in `%APPDATA%\FastPlay\markers` (the same file naming as Edit mode's autosave), so they come back
+  whenever the file is opened again.
 - **Playlist** (Ctrl+7): open or drop several files (Shift+drop appends, dropping onto the playlist window appends),
-  double-click / Enter plays, Delete removes; Next/Previous go chapters → playlist → folder, as in MPC-HC.
+  double-click / Enter plays, Delete removes; Next/Previous go markers and chapters → playlist → folder, as in
+  MPC-HC.
   **After playback**: do nothing, play next file, repeat file, close, exit.
 - **Video**: aspect ratio override (4:3, 16:9, 1.85, 2.35, 21:9, 1:1), rotate (Alt+Num4/6), mirror, flip,
   deinterlace (Ctrl+Shift+D), brightness / contrast / saturation. Mirror and flip are software filters, so while one
@@ -90,7 +99,7 @@ Layout as in FastCut: menu strip (File / Edit / Playback / View / Tools), video,
 include checkbox, cut warnings, drag to reorder), **Tracks** (which streams to export, rotation override, stream
 details, extract all) and **Files** (FastPlay's playlist: open, reorder, merge files, export all), the timeline
 (ruler, thumbnail strip, waveform, keyframe marks, segment bars: drag to create, move, resize with Shift snapping to
-keyframes, wheel zoom, middle/Alt drag pan), the transport row (`[` start box, transport, time box, volume, end box
+keyframes, wheel zoom, middle/Alt drag pan, timeline markers with their labels), the transport row (`[` start box, transport, time box, volume, end box
 `]`) and the export bar (tracks, loading progress, status, progress + cancel, Discord toggle and size limit, format,
 cut mode, separate/merge, Export).
 
@@ -101,7 +110,8 @@ back to View mode's MPC-HC keys; remap in `fastplay.ini` `[edit_keys]`):
   (Alt+Left/Right, Alt+Shift+Left/Right), PageUp/PageDown select, F2 label, Enter edit, X include/exclude, Ctrl+A /
   Ctrl+Shift+A include/exclude all, Y invert, Shift+S snap starts to keyframes, Ctrl+Up/Down reorder, sort, divide
   the timeline (N parts or a length), shift all, segments from chapters, Ctrl+Z / Ctrl+Y undo/redo (200 steps).
-- **Playback/navigation**: Space, K, J / L slower/faster, 1-4 speeds, P play segment, Ctrl+L loop segment, , / . frame
+- **Playback/navigation**: Space, K, J / L slower/faster, 1-4 speeds, P play segment, Ctrl+L loop segment, Ctrl+M mute
+  (it was M; M now adds a timeline marker in both modes, and settings still on the old default follow), , / . frame
   step (mouse back/forward too), Shift+, / Shift+. N frames, Left/Right and Shift+Left/Right seek, Ctrl+Left/Right
   keyframes, Up/Down cut points, Home/End, Ctrl+G time box.
 - **Export** (Ctrl+E, Ctrl+Shift+E selected only): separate files or merged (with chapters from segments), keyframe
@@ -162,7 +172,7 @@ FastPlay has. The rest are FastPlay's own and use keys MPC-HC leaves free.
 | Ctrl+wheel (Alt+Right / Alt+Left) | Jump 20 s | Shift+Right / Shift+Left | Next / previous keyframe |
 | Home | Go to start | Ctrl+G | Go to... |
 | Ctrl+Up / Ctrl+Down / Ctrl+R | Faster / slower / normal speed | Num+ / Num- | Audio delay ±10 ms |
-| PageDown / PageUp, Mouse X2 / X1 | Next / previous chapter (or file) | Ctrl+PageDown / Ctrl+PageUp | Next / previous file |
+| PageDown / PageUp, Mouse X2 / X1 | Next / previous marker or chapter (or file) | Ctrl+PageDown / Ctrl+PageUp | Next / previous file |
 | Ctrl+O, Ctrl+Q | Open | Ctrl+E | Reopen (same position) |
 | Ctrl+C | Close | Alt+X | Exit |
 | Delete | Move file to the Recycle Bin (asks first) | Ctrl+Shift+F10 | Open file location |
@@ -185,7 +195,8 @@ FastPlay has. The rest are FastPlay's own and use keys MPC-HC leaves free.
 | Shift+F10 | Properties | O | Options (opens fastplay.ini) |
 | Apps / right-click | Menu | Ctrl+7 | Playlist |
 | E | Edit mode | Ctrl+Shift+S | Save A-B clip (lossless) |
-| Ctrl+Shift+C | Discord clip of the A-B range (copied) | | |
+| Ctrl+Shift+C | Discord clip of the A-B range (copied) | M | Add a timeline marker |
+| Shift+PageDown / Shift+PageUp | Next / previous marker | Alt+M / Shift+M | Label / delete the marker at the playhead |
 | Ctrl+U | Open URL | Ctrl+Shift+D | Deinterlace |
 | Ctrl+F1 | Shortcut list | | |
 

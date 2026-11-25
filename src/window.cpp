@@ -521,7 +521,7 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
         OnIndex((void*)l, (unsigned)w);
         return 0;
     case WM_APP_THUMB:
-        if (hoverT_ >= 0 && thumbs_) thumbWnd_->Show(thumbs_->Get(hoverT_), hoverT_, hoverAnchor_, dpi_);
+        if (hoverT_ >= 0 && thumbs_) thumbWnd_->Show(thumbs_->Get(hoverT_), hoverT_, hoverAnchor_, dpi_, hoverLabel_);
         return 0;
     case WM_APP_DISABLE_CHILD:
         // libmpv's video window sits on top of ours. Disabled, it passes mouse input to us (its parent).
@@ -884,7 +884,7 @@ void App::ToggleRemaining() {
     RefreshBar();
 }
 
-void App::HoverSeek(double t, POINT anchor) {
+void App::HoverSeek(double t, POINT anchor, const std::wstring& label) {
     hoverT_ = t;
     if (t < 0) {
         thumbWnd_->Hide();
@@ -899,7 +899,8 @@ void App::HoverSeek(double t, POINT anchor) {
         StartThumbnails();
         if (thumbs_) thumbs_->Request(t);
     }
-    thumbWnd_->Show(th, t, anchor, dpi_);
+    hoverLabel_ = label;
+    thumbWnd_->Show(th, t, anchor, dpi_, label);
 }
 
 // "Mix all audio tracks": mpv's lavfi-complex sums every audio track of the file into the one audio output (video
@@ -965,6 +966,15 @@ void App::RunCommand(const std::wstring& cmd) {
         mpvx::SetStr(mpv_, name.c_str(), value.c_str());
     } else if (verb == L"get") {
         util::TimingLog(("property " + util::Utf8(arg) + " = " + mpvx::GetStr(mpv_, util::Utf8(arg).c_str())).c_str());
+    } else if (verb == L"markers") {  // test hook: log the marker list
+        std::string out = "markers: " + std::to_string(markers_.Count());
+        for (const Marker& mk : markers_.Items()) out += " [" + std::to_string(mk.t) + " " + util::Utf8(mk.label) + "]";
+        util::TimingLog(out.c_str());
+    } else if (verb == L"markerlabel") {  // test hook: "markerlabel <index> <label>" (the dialog can't be driven)
+        size_t sp2 = arg.find(L' ');
+        int i = _wtoi(arg.substr(0, sp2).c_str());
+        markers_.Rename(i, sp2 == std::wstring::npos ? L"" : arg.substr(sp2 + 1));
+        MarkersChanged();
     } else if (verb == L"state") {
         char b[512];
         snprintf(b, sizeof b, "state: playlist %d/%d, after %d, volume %d/%d, duration %.3f, path %s", plPos_,
@@ -1039,8 +1049,11 @@ void App::DoAction(Act a) {
     case Act::SubDelayDown: mpvx::CmdAsync(mpv_, {"osd-msg", "add", "sub-delay", "-0.1"}); break;
     case Act::NextChapter:
     case Act::PrevChapter:
-        // MPC-HC: chapters first, then the playlist, then the folder.
-        if (!bar_.chapters.empty()) mpvx::CmdAsync(mpv_, {"osd-msg", "add", "chapter", a == Act::NextChapter ? "1" : "-1"});
+        // MPC-HC: chapters first, then the playlist, then the folder. Markers count like chapters.
+        if (!markers_.Empty()) {
+            if (!JumpMarker(a == Act::NextChapter ? 1 : -1, true) && !StepPlaylist(a == Act::NextChapter ? 1 : -1))
+                StepFile(a == Act::NextChapter ? 1 : -1);
+        } else if (!bar_.chapters.empty()) mpvx::CmdAsync(mpv_, {"osd-msg", "add", "chapter", a == Act::NextChapter ? "1" : "-1"});
         else if (!StepPlaylist(a == Act::NextChapter ? 1 : -1)) StepFile(a == Act::NextChapter ? 1 : -1);
         break;
     case Act::NextFile: if (!StepPlaylist(1)) StepFile(1); break;
@@ -1119,7 +1132,9 @@ void App::DoAction(Act a) {
         break;
     }
     case Act::EditMode: ToggleEditMode(); break;
-    default: ExtraAction(a); break;
+    default:
+        if (!MarkerAction(a)) ExtraAction(a);
+        break;
     }
 }
 
@@ -1185,6 +1200,9 @@ void App::BuildMenu(HMENU m) {
         }
     }
     AppendMenuW(m, MF_POPUP, (UINT_PTR)nav, L"Navigate");
+    HMENU marks = CreatePopupMenu();
+    BuildMarkerMenu(marks);
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)marks, markers_.Empty() ? L"Markers" : (L"Markers (" + std::to_wstring(markers_.Count()) + L")").c_str());
 
     auto tracks = GetTracks(f ? mpv_ : nullptr);
     HMENU audio = CreatePopupMenu();
@@ -1286,6 +1304,8 @@ void App::OnMenuCommand(UINT id) {
             std::string f8 = util::Utf8(f);
             mpvx::CmdAsync(mpv_, {"sub-add", f8.c_str(), "select"});
         }
+    } else if (id >= kCmdMarker && id < kCmdMarker + 1000) {
+        GoToMarker((int)(id - kCmdMarker));
     } else if (id == kCmdOpenFolder) {
         std::wstring args = L"/select,\"" + path_ + L"\"";
         ShellExecuteW(hwnd_, nullptr, L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);

@@ -107,6 +107,7 @@ void Editor::CreateWindows() {
     tl_.Create(inst, main, cb);
     tl_.segments = &segs_;
     tl_.marked = &marked_;
+    tl_.markers = &app_->markers_.Items();
     tl_.thumbs = this;
 
     BuildMenuStrip();
@@ -939,10 +940,15 @@ void Editor::Leave() {
     app_->UpdateTitle();
 }
 
+void Editor::MarkersChanged() {
+    if (active_) tl_.Invalidate();
+}
+
 void Editor::SaveSettings() {
     if (util::TestMode()) return;
     app_->ini_.Load(app_->iniPath_);  // keep edits made by hand while running
     s_.Save(app_->ini_);
+    MigrateKeyDefaults();
     for (const auto& a : actions_)
         if (!app_->ini_.Has(L"edit_keys", a.id)) app_->ini_.Set(L"edit_keys", a.id, a.defaults);
     app_->ini_.Save(app_->iniPath_);

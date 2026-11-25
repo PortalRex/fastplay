@@ -156,7 +156,7 @@ void Editor::RegisterActions() {
     add(L"speed05", L"Speed 0.5\u00D7", [this] { SetSpeed(0.5); }, L"2");
     add(L"speed15", L"Speed 1.5\u00D7", [this] { SetSpeed(1.5); }, L"3");
     add(L"speed2", L"Speed 2\u00D7", [this] { SetSpeed(2); }, L"4");
-    add(L"mute", L"Mute", [this] { app_->DoAction(Act::Mute); }, L"M");
+    add(L"mute", L"Mute", [this] { app_->DoAction(Act::Mute); }, L"Ctrl+M");
     held(L"volup", L"Volume up", [this] { app_->SetVolume(app_->bar_.volume + 5); }, L"Shift+Up");
     held(L"voldown", L"Volume down", [this] { app_->SetVolume(app_->bar_.volume - 5); }, L"Shift+Down");
     add(L"cycleaudio", L"Next audio track (preview)", [&mpv] { mpvx::CmdAsync(mpv, {"osd-msg", "cycle", "audio"}); });
@@ -322,9 +322,24 @@ void Editor::RegisterActions() {
     add(L"shortcuts", L"Shortcut cheat sheet", [this] { ShowTextBox(app_->hwnd_, L"Edit mode shortcuts", ActionsHelp()); }, L"F1");
 }
 
+// Edit-mode defaults that changed. SaveSettings writes every default into [edit_keys], so a value still equal to the
+// old default means "never customised": it follows the new default.
+void Editor::MigrateKeyDefaults() {
+    static const struct { const wchar_t* id; const wchar_t* oldDefault; } kChanged[] = {
+        {L"mute", L"M"},  // M adds a timeline marker in both modes now (View mode's mute is Ctrl+M as well)
+    };
+    for (const auto& c : kChanged) {
+        auto it = actionIndex_.find(c.id);
+        if (it == actionIndex_.end() || !app_->ini_.Has(L"edit_keys", c.id)) continue;
+        if (util::Trim(app_->ini_.Get(L"edit_keys", c.id)) == c.oldDefault)
+            app_->ini_.Set(L"edit_keys", c.id, actions_[it->second].defaults);
+    }
+}
+
 void Editor::LoadKeymap() {
     keyToAction_.clear();
     keyText_.clear();
+    MigrateKeyDefaults();
     for (const auto& a : actions_) {
         std::wstring list = app_->ini_.Has(L"edit_keys", a.id) ? app_->ini_.Get(L"edit_keys", a.id) : a.defaults;
         size_t pos = 0;

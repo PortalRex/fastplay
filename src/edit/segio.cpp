@@ -505,14 +505,16 @@ std::wstring Combine(const std::wstring& a, const std::wstring& b) {
 
 namespace {
 // SHA-1 of the UTF-8 lower-cased full path, first 16 upper-case hex digits (FastCut's SegmentIO.AutosavePath).
-std::wstring AutosaveName(const std::wstring& mediaPath) {
+std::wstring AutosaveName(const std::wstring& mediaPath) { return MediaKey(mediaPath) + L".llc"; }
+}  // namespace
+
+std::wstring MediaKey(const std::wstring& mediaPath) {
     uint8_t digest[20];
     Sha1(util::Utf8(LowerInvariant(util::FullPath(mediaPath))), digest);
     wchar_t hex[17];
     for (int i = 0; i < 8; i++) swprintf(hex + i * 2, 3, L"%02X", digest[i]);
-    return std::wstring(hex, 16) + L".llc";
+    return std::wstring(hex, 16);
 }
-}  // namespace
 
 std::wstring AutosavePath(const std::wstring& mediaPath) {
     return Combine(Combine(util::DataDir(), L"projects"), AutosaveName(mediaPath));

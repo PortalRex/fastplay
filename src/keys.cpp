@@ -29,8 +29,8 @@ static const ActionInfo kActions[] = {
     {Act::AudioDelayDown, L"audio_delay_down", L"Audio delay -10 ms", L"NumMinus"},
     {Act::SubDelayUp, L"subtitle_delay_up", L"Subtitle delay +", L"F2"},
     {Act::SubDelayDown, L"subtitle_delay_down", L"Subtitle delay -", L"F1"},
-    {Act::NextChapter, L"next", L"Next (chapter or file)", L"PageDown, MouseX2"},
-    {Act::PrevChapter, L"previous", L"Previous (chapter or file)", L"PageUp, MouseX1"},
+    {Act::NextChapter, L"next", L"Next (marker, chapter or file)", L"PageDown, MouseX2"},
+    {Act::PrevChapter, L"previous", L"Previous (marker, chapter or file)", L"PageUp, MouseX1"},
     {Act::NextFile, L"next_file", L"Next file", L"Ctrl+PageDown"},
     {Act::PrevFile, L"previous_file", L"Previous file", L"Ctrl+PageUp"},
     {Act::Open, L"open", L"Open file...", L"Ctrl+O, Ctrl+Q"},
@@ -120,6 +120,12 @@ static const ActionInfo kActions[] = {
     {Act::PanDownRight, L"pan_down_right", L"Pan down-right", L"Ctrl+Num3"},
     {Act::PanCenter, L"pan_center", L"Center (pan only)", L"Ctrl+Num5"},
     {Act::ViewCompact, L"view_compact", L"Compact view", L"2"},
+    {Act::AddMarker, L"add_marker", L"Add marker", L"M"},
+    {Act::DeleteMarker, L"delete_marker", L"Delete marker at playhead", L"Shift+M"},
+    {Act::RenameMarker, L"rename_marker", L"Label marker at playhead...", L"Alt+M"},
+    {Act::NextMarker, L"next_marker", L"Next marker", L"Shift+PageDown"},
+    {Act::PrevMarker, L"previous_marker", L"Previous marker", L"Shift+PageUp"},
+    {Act::ClearMarkers, L"clear_markers", L"Delete all markers", L""},
 };
 
 const ActionInfo* Actions(int* count) {

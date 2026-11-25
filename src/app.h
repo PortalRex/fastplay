@@ -6,6 +6,7 @@
 #include "keys.h"
 #include "mp4index.h"
 #include "thumbs.h"
+#include "markers.h"
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -39,6 +40,7 @@ enum : UINT {
     kCmdAfter = 7300,      // + after-playback mode
     kCmdAssocOn = 7400, kCmdAssocOff, kCmdAddFiles, kCmdClearPlaylist, kCmdAbout,
     kCmdVolMax = 7500,     // + index
+    kCmdMarker = 8000,     // + marker index (Markers menu: go to it)
 };
 
 constexpr ULONG_PTR kCopyDataOpen = 0x464C5059;    // 'FPLY': WM_COPYDATA payload: UTF-16 paths separated by '\n'
@@ -73,7 +75,10 @@ public:
     void DoAction(Act a);
     void SetVolume(int v);
     void ShowContextMenu(POINT screen);
-    void HoverSeek(double t, POINT anchorScreen);  // t < 0 hides the preview
+    void HoverSeek(double t, POINT anchorScreen, const std::wstring& label = L"");  // t < 0 hides the preview
+    const std::vector<Marker>& Markers() const { return markers_.Items(); }
+    void GoToMarker(int i);                     // exact seek + what the marker is on the OSD
+    void MarkerMenu(int i, POINT screen);       // right-click on a marker in the seekbar
     const BarState& Bar() const { return bar_; }
     std::wstring ShortcutText(Act a) const { return keys_.ShortcutText(a); }
     void ToggleRemaining();
@@ -179,6 +184,17 @@ private:
     void BuildExtraMenus(HMENU m, HMENU play, HMENU video, HMENU audio, HMENU subs);
     bool ExtraMenuCommand(UINT id);
 
+    // markerui.cpp: timeline markers
+    bool MarkerAction(Act a);                   // false: not a marker action
+    bool JumpMarker(int dir, bool quietAtEnd);  // next/previous marker or chapter; false when there's none that way
+    void RenameMarker(int i);
+    void DeleteMarker(int i);
+    void ClearMarkers();
+    void MarkersChanged();                      // repaint the seekbar and Edit mode's timeline
+    void SeekToTime(double t);                  // exact seek through Edit mode when it's open
+    double CurrentPos();                        // playhead (Edit mode's, or the seek target while one is pending)
+    void BuildMarkerMenu(HMENU m);
+
     HINSTANCE inst_ = nullptr;
     HWND hwnd_ = nullptr, video_ = nullptr, mpvChild_ = nullptr;
     ControlBar* barWnd_ = nullptr;
@@ -213,6 +229,7 @@ private:
     bool spinning_ = false;
     double hoverT_ = -1;
     POINT hoverAnchor_ = {};
+    std::wstring hoverLabel_;           // marker label shown in the hover preview
     double startOverride_ = -1;          // --start=SECONDS
     double pendingStart_ = 0;
     HANDLE instanceMutex_ = nullptr;
@@ -280,6 +297,8 @@ private:
     bool dclipBusy_ = false;
 
     bool audioMixed_ = false;  // lavfi-complex is mixing this file's audio tracks
+
+    MarkerList markers_;       // timeline markers of the current file
 
     // Edit mode (src/edit), created the first time it is used
     edit::Editor* editor_ = nullptr;
