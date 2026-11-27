@@ -71,7 +71,7 @@ public:
     int Run(HINSTANCE inst, const std::vector<std::wstring>& args);
 
     // Used by the control bar.
-    void SeekTo(double t, bool exact);
+    void SeekTo(double t, bool exact, bool osd = false);  // osd: show the position on the video, like key seeks
     void DoAction(Act a);
     void SetVolume(int v);
     void ShowContextMenu(POINT screen);
@@ -146,6 +146,7 @@ private:
 
     // Actions helpers
     void SeekRelative(double secs, const char* flags);
+    void SeekBy(double secs);                   // the arrow-key jumps
     void CycleTrack(const char* type, int dir);
     void ToggleStats();
     void ShowProperties();

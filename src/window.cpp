@@ -736,11 +736,13 @@ LRESULT App::OnMain(UINT m, WPARAM w, LPARAM l) {
 
 // ------------------------------------------------------------------------------------------------ actions
 
-void App::SeekTo(double t, bool exact) {
+void App::SeekTo(double t, bool exact, bool osd) {
     if (!mpv_ || !bar_.hasFile) return;
     char ts[32];
     snprintf(ts, sizeof ts, "%.3f", t);
-    mpvx::CmdAsync(mpv_, {"seek", ts, exact ? "absolute+exact" : "absolute+keyframes"});
+    const char* flags = exact ? "absolute+exact" : "absolute+keyframes";
+    if (osd) mpvx::CmdAsync(mpv_, {"osd-msg", "seek", ts, flags});
+    else mpvx::CmdAsync(mpv_, {"seek", ts, flags});
     bar_.pos = t;
     seekHoldPos_ = t;
     seekHoldExact_ = exact;
@@ -766,6 +768,34 @@ void App::SeekRelative(double secs, const char* flags) {
     char ts[32];
     snprintf(ts, sizeof ts, "%.3f", secs);
     mpvx::CmdAsync(mpv_, {"osd-msg", "seek", ts, flags});
+}
+
+// Arrow-key jump: lands on a keyframe like mpv's relative keyframe seek (forward: the first one at or after the
+// target), but picks that keyframe from FastPlay's own index. mpv/FFmpeg pick a forward seek's keyframe from the
+// samples the demuxer has read so far; in a fragmented MP4 (OBS) the next fragment often hasn't been read yet, and
+// the "next" keyframe it finds is wherever playback was before the last seekbar click, minutes away.
+void App::SeekBy(double secs) {
+    const auto& k = index_.keyTimes;
+    if (s_.exactSeek || !indexReady_ || k.empty() || !bar_.hasFile) {
+        SeekRelative(secs, s_.exactSeek ? "relative+exact" : "relative");
+        return;
+    }
+    double target = CurrentPos() + secs;  // includes a seek still in flight, so quick presses add up
+    size_t i;
+    if (secs > 0) {
+        i = (size_t)(std::lower_bound(k.begin(), k.end(), target) - k.begin());
+        if (i == k.size()) {  // past the last keyframe: mpv's own seek goes to the end
+            SeekRelative(secs, "relative");
+            return;
+        }
+    } else {
+        auto it = std::upper_bound(k.begin(), k.end(), target);
+        i = it == k.begin() ? 0 : (size_t)(it - k.begin() - 1);
+    }
+    // Exact seek to that keyframe: a plain keyframe seek outside mpv's cache lands one fragment early on these files
+    // (2 s before the keyframe asked for). Inside the cache this costs nothing extra; outside it decodes up to one
+    // fragment (about 0.1 s). The millisecond keeps the rounded time from falling just before the keyframe.
+    SeekTo(k[i] + 0.001, true, true);
 }
 
 void App::SetVolume(int v) {
@@ -988,7 +1018,6 @@ void App::DoAction(Act a) {
     if (!mpv_ && a != Act::Exit && a != Act::Open && a != Act::Menu && a != Act::EditSettings && a != Act::Playlist &&
         a != Act::OpenUrl && a != Act::Help)
         return;
-    const char* relFlags = s_.exactSeek ? "relative+exact" : "relative";
     switch (a) {
     case Act::PlayPause:
         if (!bar_.hasFile) break;
@@ -1008,12 +1037,12 @@ void App::DoAction(Act a) {
         break;
     case Act::FrameStep: mpvx::CmdAsync(mpv_, {"frame-step"}); break;
     case Act::FrameBack: mpvx::CmdAsync(mpv_, {"frame-back-step"}); break;
-    case Act::SeekFwdSmall: SeekRelative(s_.seekSmall, relFlags); break;
-    case Act::SeekBackSmall: SeekRelative(-s_.seekSmall, relFlags); break;
-    case Act::SeekFwdMed: SeekRelative(s_.seekMedium, relFlags); break;
-    case Act::SeekBackMed: SeekRelative(-s_.seekMedium, relFlags); break;
-    case Act::SeekFwdLarge: SeekRelative(s_.seekLarge, relFlags); break;
-    case Act::SeekBackLarge: SeekRelative(-s_.seekLarge, relFlags); break;
+    case Act::SeekFwdSmall: SeekBy(s_.seekSmall); break;
+    case Act::SeekBackSmall: SeekBy(-s_.seekSmall); break;
+    case Act::SeekFwdMed: SeekBy(s_.seekMedium); break;
+    case Act::SeekBackMed: SeekBy(-s_.seekMedium); break;
+    case Act::SeekFwdLarge: SeekBy(s_.seekLarge); break;
+    case Act::SeekBackLarge: SeekBy(-s_.seekLarge); break;
     case Act::KeyframeFwd:
     case Act::KeyframeBack: {
         double pos = mpvx::GetDouble(mpv_, "time-pos", 0);
