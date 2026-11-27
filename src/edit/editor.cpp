@@ -906,8 +906,14 @@ void Editor::Enter() {
         }
     }
     SetTimer(app_->hwnd_, kTick, 33, nullptr);
-    if (!app_->path_.empty() && (file_ != app_->path_ || !media_)) OnFileOpened(app_->path_);
-    else UpdateUiForMedia();
+    if (!app_->path_.empty() && (file_ != app_->path_ || !media_)) {
+        OnFileOpened(app_->path_);
+    } else {
+        UpdateUiForMedia();
+        // Leave() retired the thumbnail decoder; the same file coming back doesn't go through OnLoaded, which is
+        // where it starts otherwise (the timeline strip stayed blank from the second visit on).
+        if (media_ && media_->Video()) app_->StartThumbnails();
+    }
     if (app_->mpv_ && !app_->path_.empty()) mpvx::SetFlag(app_->mpv_, "pause", true);
     app_->Layout();
     app_->UpdateTitle();
