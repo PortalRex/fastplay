@@ -119,6 +119,13 @@ back to View mode's MPC-HC keys; remap in `fastplay.ini` `[edit_keys]`):
   templates, output folder, speed (FPS) change, rotation override, metadata/chapters, fast start, **Discord-ready**
   (H.264 stays lossless; HEVC/AV1/10-bit re-encoded to H.264, fitted under 10 / 50 / 500 MB or a custom limit),
   output verification, and the one-time "export to an SSD instead" tip when source and output share a hard disk.
+- **Overwrite the original** (File > *Export and overwrite the original...*, or the check box at the bottom of the
+  Export dialog, which then shows a red warning): the included segments become one lossless file in the source's own
+  format (no Discord re-encode, size limit or audio mix), written next to the source and checked, and only then put
+  in its place (same name and creation date); FastPlay closes the file for the swap and reopens the result. Asks
+  once more before starting, never stays switched on, and there is no undo. Markers inside the kept parts move with
+  them; the autosaved segments of the old cut are dropped. If the check finds a problem or another program has the
+  file open, the original stays and the edit is kept as `<name>-edited.<ext>`.
 - **Tools**: full-resolution snapshot (C), snapshots at segment starts or every N s, extract all tracks, merge files
   (lossless when they match, re-encoded otherwise), download URL / HLS, detect black / silence / scene changes, stream
   details, FFmpeg log (F12).

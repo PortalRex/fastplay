@@ -160,7 +160,15 @@ private:
     void LoadProjectDialog();
     void ImportSegments();
     void ExportSegmentsAs();
-    void Export(bool onlySelected);
+    void Export(bool onlySelected, bool overwrite = false);
+    // Overwrite export, on the UI thread once the edited file is written and checked: where the source's markers
+    // land in it, then let go of the source so it can be replaced.
+    std::vector<Marker> MarkersAfterCut(const std::vector<Segment>& list, const std::wstring& cutMode, double speed) const;
+    // Export job thread: checks the one written file, has the UI let go of the source, swaps it in, reopens.
+    std::pair<std::wstring, std::wstring> ReplaceSource(class Exporter& ex, const MediaInfo& m,
+                                                        const std::vector<Segment>& list, const EditSettings& settings,
+                                                        double speed, const std::vector<std::wstring>& outs,
+                                                        ProgressFn p, Cancel* ct);
     void OfferFasterDrive(double outputSeconds);
     void Snapshot();
     void SnapshotSegments();

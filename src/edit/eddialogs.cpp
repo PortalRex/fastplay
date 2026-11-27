@@ -37,6 +37,7 @@ enum : WORD {
     kSegStart = 101, kSegEnd, kSegLabel, kSegTags, kSegInclude,
     kExpDir = 201, kExpBrowse, kExpMode, kExpFormat, kExpCut, kExpName, kExpMergeName, kExpSpeed, kExpSizeMB,
     kExpMeta, kExpChapters, kExpSegChapters, kExpNegTs, kExpFastStart, kExpDiscord, kExpVerify, kExpConfirm,
+    kExpOverwrite, kExpOverwriteWarn,
     kSetDir = 301, kSetBrowse, kSetName, kSetMergeName, kSetSnap, kSetSeekSmall, kSetSeekLarge, kSetFrameJump,
     kSetNudge, kSetThumbs, kSetWave, kSetKeyframes, kSetAutoSave, kSetConfirm, kSetVerify, kSetMeta, kSetChapters,
     kSetSegChapters, kSetNegTs, kSetFastStart, kSetDiscord, kSetCopyClip,
@@ -301,6 +302,14 @@ public:
         int w = width_ - kMargin - x;
         int h = m_.Height(text, w);
         t_.Add(SS_LEFT | SS_NOPREFIX | WS_GROUP, x, y, w, h, kHint, kClsStatic, text);
+        y += h + 4;
+    }
+
+    // Static text with its own id in the control column (the dialog colours and bolds it), room for bold text.
+    void Warning(WORD id, const wchar_t* text) {
+        int w = CtrlW();
+        int h = m_.Height(text, w * 5 / 6);  // bold is wider than the measuring font
+        t_.Add(SS_LEFT | SS_NOPREFIX | WS_GROUP, CtrlX(), y, w, h, id, kClsStatic, text);
         y += h + 4;
     }
 
@@ -683,12 +692,18 @@ struct SegmentDlg : Dialog {
 
 const wchar_t* const kCutModes[] = {L"keyframe", L"exact", L"smart"};
 
+const wchar_t kOverwriteWarning[] =
+    L"THE ORIGINAL FILE WILL BE REPLACED BY THE EDITED VERSION. EVERYTHING OUTSIDE THE SEGMENTS IS GONE FOR GOOD. "
+    L"THIS CANNOT BE UNDONE.";
+
 struct ExportDlg : Dialog {
     EditSettings* s;
     double* speed;
+    bool* overwrite = nullptr;  // null: no overwrite option (a URL, or the test hook's plain layout)
     std::wstring inputExt;
+    HFONT bold = nullptr;
 
-    static std::vector<uint8_t> Layout(int segCount) {
+    static std::vector<uint8_t> Layout(int segCount, bool withOverwrite) {
         Form f(340, {L"Output folder", L"Mode", L"Format", L"Cut mode", L"File name", L"Merged name", L"Speed ×",
                      L"Size limit (MB)"});
         f.Folder(kExpDir, kExpBrowse, L"Output folder");
@@ -710,7 +725,37 @@ struct ExportDlg : Dialog {
         f.Edit(kExpSizeMB, L"Size limit (MB)", 40, L"Discord upload limit, 0 = none; bigger exports are re-encoded");
         f.Check(kExpVerify, L"Check outputs after export (duration, tracks)");
         f.Check(kExpConfirm, L"Show this dialog before every export");
+        if (withOverwrite) {
+            f.Gap(4);
+            f.Check(kExpOverwrite, L"Overwrite the original file (one lossless file, replaces the source)");
+            f.Warning(kExpOverwriteWarn, kOverwriteWarning);
+        }
         return f.Finish(L"Export " + Plural(segCount, L"segment"));
+    }
+
+    // Overwriting writes one file in the source's own format next to it: the output, mode, format, name and
+    // Discord options don't apply then (they keep their values for normal exports).
+    void UpdateOverwrite(HWND d) {
+        bool on = overwrite && Checked(d, kExpOverwrite);
+        for (int id : {kExpDir, kExpBrowse, kExpMode, kExpFormat, kExpName, kExpMergeName, kExpDiscord, kExpSizeMB})
+            EnableWindow(GetDlgItem(d, id), !on && (id != kExpSizeMB || Checked(d, kExpDiscord)));
+        if (HWND w = GetDlgItem(d, kExpOverwriteWarn)) ShowWindow(w, on ? SW_SHOWNA : SW_HIDE);
+        SetDlgItemTextW(d, IDOK, on ? L"Overwrite" : L"OK");
+    }
+
+    INT_PTR Message(HWND d, UINT m, WPARAM w, LPARAM l, bool* handled) override {
+        if (m != WM_CTLCOLORSTATIC || GetDlgCtrlID((HWND)l) != kExpOverwriteWarn) return 0;
+        *handled = true;
+        HDC dc = (HDC)w;
+        SetTextColor(dc, dark ? RGB(255, 70, 70) : RGB(220, 0, 0));
+        SetBkColor(dc, dark ? kDarkBg : GetSysColor(COLOR_BTNFACE));
+        (void)d;
+        return dark ? (INT_PTR)DarkBgBrush() : (INT_PTR)GetSysColorBrush(COLOR_BTNFACE);
+    }
+
+    void Destroyed() override {
+        if (bold) DeleteObject(bold);
+        bold = nullptr;
     }
 
     bool Init(HWND d) override {
@@ -745,6 +790,15 @@ struct ExportDlg : Dialog {
         Check(d, kExpVerify, s->verifyOutputs);
         Check(d, kExpConfirm, s->confirmExport);
         EnableWindow(GetDlgItem(d, kExpSizeMB), s->discordReady);
+        if (HWND warn = GetDlgItem(d, kExpOverwriteWarn)) {
+            LOGFONTW lf = {};
+            GetObjectW((HFONT)SendMessageW(d, WM_GETFONT, 0, 0), sizeof lf, &lf);
+            lf.lfWeight = FW_BOLD;
+            bold = CreateFontIndirectW(&lf);
+            SendMessageW(warn, WM_SETFONT, (WPARAM)bold, FALSE);
+            Check(d, kExpOverwrite, overwrite && *overwrite);
+            UpdateOverwrite(d);
+        }
         return true;
     }
 
@@ -755,6 +809,10 @@ struct ExportDlg : Dialog {
         }
         if (id == kExpDiscord && code == BN_CLICKED) {
             EnableWindow(GetDlgItem(d, kExpSizeMB), Checked(d, kExpDiscord));  // the limit only applies then
+            return true;
+        }
+        if (id == kExpOverwrite && code == BN_CLICKED) {
+            UpdateOverwrite(d);
             return true;
         }
         return false;
@@ -790,6 +848,7 @@ struct ExportDlg : Dialog {
         s->discordSizeMB = mb;
         s->verifyOutputs = Checked(d, kExpVerify);
         s->confirmExport = Checked(d, kExpConfirm);
+        if (overwrite) *overwrite = Checked(d, kExpOverwrite);
         return true;
     }
 };
@@ -1174,12 +1233,14 @@ bool EditSegment(HWND owner, Segment& seg, const std::function<std::wstring(doub
     return RunModal(owner, SegmentDlg::Layout(), dlg);
 }
 
-bool ExportOptions(HWND owner, EditSettings& s, int segCount, const std::wstring& inputExt, double* speed) {
+bool ExportOptions(HWND owner, EditSettings& s, int segCount, const std::wstring& inputExt, double* speed,
+                   bool* overwrite) {
     ExportDlg dlg;
     dlg.s = &s;
     dlg.speed = speed;
+    dlg.overwrite = overwrite;
     dlg.inputExt = inputExt;
-    return RunModal(owner, ExportDlg::Layout(segCount), dlg);
+    return RunModal(owner, ExportDlg::Layout(segCount, overwrite != nullptr), dlg);
 }
 
 bool Settings(HWND owner, EditSettings& s) {
@@ -1275,7 +1336,19 @@ HWND CreateForTest(int which, HWND owner, Segment* seg, EditSettings* s, double*
         x->speed = speed;
         x->inputExt = L".mp4";
         dlg = x;
-        t = ExportDlg::Layout(3);
+        t = ExportDlg::Layout(3, false);
+        break;
+    }
+    case 7: {  // export with "Overwrite the original file" checked (its red warning showing)
+        static bool overwriteOn;
+        overwriteOn = true;
+        auto* x = new ExportDlg;
+        x->s = s;
+        x->speed = speed;
+        x->overwrite = &overwriteOn;
+        x->inputExt = L".mp4";
+        dlg = x;
+        t = ExportDlg::Layout(3, true);
         break;
     }
     case 2: {

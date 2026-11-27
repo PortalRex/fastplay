@@ -14,7 +14,9 @@ bool EditSegment(HWND owner, Segment& seg, const std::function<std::wstring(doub
 // Discord-ready + size limit. Writes the choices into s and *speed.
 extern const wchar_t* const kFormats[];  // "same", "mp4", "mkv", ... (ExportDialog.Formats)
 extern const int kFormatCount;
-bool ExportOptions(HWND owner, EditSettings& s, int segCount, const std::wstring& inputExt, double* speed);
+// overwrite: non-null adds "Overwrite the original file" (in: pre-checked, out: the choice) with a red warning.
+bool ExportOptions(HWND owner, EditSettings& s, int segCount, const std::wstring& inputExt, double* speed,
+                   bool* overwrite = nullptr);
 
 // SettingsDialog: seek steps, frame jump, nudge frames, snapshot format, thumbnails/waveform/keyframes rows,
 // auto-save, confirm/verify, output folder.

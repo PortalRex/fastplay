@@ -295,10 +295,14 @@ struct Exporter::Impl {
         return false;
     }
 
-    std::wstring OutDir() const { return !s.outDir.empty() && DirExists(s.outDir) ? s.outDir : util::DirName(m.path); }
+    std::wstring OutDir() const {
+        if (s.overwriteSource) return util::DirName(m.path);  // same volume, so the result can replace the source
+        return !s.outDir.empty() && DirExists(s.outDir) ? s.outDir : util::DirName(m.path);
+    }
     std::wstring Base() const { return BaseName(m.path); }
 
     std::wstring OutName(const std::wstring& tmpl, const Segment* seg, int n, int count) const {
+        if (s.overwriteSource) return UniquePath(Combine(OutDir(), Base() + L".fastplay-overwrite" + OutExt()));
         std::wstring name;
         if (count == 1 && seg && tmpl.find(L"{n}") != std::wstring::npos && seg->name.empty() && s.nameTemplate == tmpl) {
             name = Base() + L"-cut";

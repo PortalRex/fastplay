@@ -13,8 +13,10 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
+#include <future>
 #include <numeric>
 #include <sstream>
 
@@ -22,6 +24,35 @@ namespace edit {
 
 namespace {
 bool FileExists(const std::wstring& p) { return !p.empty() && GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+// Puts `edited` in place of `src`: the original is renamed aside first (that fails while anything still has it open,
+// so it doubles as the "is it free yet" check), then the edited file takes its name and creation time, then the
+// original is deleted. Any failure on the way puts the original back. Returns an empty string on success.
+std::wstring SwapInEdited(const std::wstring& src, const std::wstring& edited) {
+    std::wstring aside = util::DirName(src) + L"\\" + util::FileName(src) + L".fastplay-old";
+    FILETIME created = {};
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (GetFileAttributesExW(src.c_str(), GetFileExInfoStandard, &fa)) created = fa.ftCreationTime;
+    bool moved = false;
+    for (int i = 0; i < 75 && !moved; i++) {  // up to 15 s: mpv, the thumbnailer and the scanners let go quickly
+        moved = MoveFileExW(src.c_str(), aside.c_str(), 0) != 0;
+        if (!moved) Sleep(200);
+    }
+    if (!moved) return L"the original is still open in another program";
+    if (!MoveFileExW(edited.c_str(), src.c_str(), 0)) {
+        DWORD e = GetLastError();
+        MoveFileExW(aside.c_str(), src.c_str(), 0);
+        return L"renaming the edited file failed (error " + std::to_wstring(e) + L")";
+    }
+    HANDLE h = CreateFileW(src.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        if (created.dwLowDateTime || created.dwHighDateTime) SetFileTime(h, &created, nullptr, nullptr);
+        CloseHandle(h);
+    }
+    for (int i = 0; i < 25 && !DeleteFileW(aside.c_str()); i++) Sleep(200);
+    return L"";
+}
 
 std::string ReadAll(const std::wstring& path) {
     std::ifstream f(path, std::ios::binary);
@@ -280,6 +311,7 @@ void Editor::RegisterActions() {
     add(L"exportseg", L"Export segments as...", [this] { ExportSegmentsAs(); });
     add(L"export", L"Export", [this] { Export(false); }, L"Ctrl+E");
     add(L"exportsel", L"Export selected segment(s) only", [this] { Export(true); }, L"Ctrl+Shift+E");
+    add(L"exportover", L"Export and overwrite the original...", [this] { Export(false, true); });
     add(L"batch", L"Export all files in the Files tab...", [this] { BatchExport(); });
     add(L"exportopts", L"Export options...", [this] {
         double speed = 1;
@@ -428,7 +460,7 @@ void Editor::ShowMenu(const std::wstring& title, POINT screen) {
     HMENU m = CreatePopupMenu();
     if (title == L"File")
         BuildMenu(m, {L"open", L"openurl", L"close", nullptr, L"loadproject", L"save", L"importseg", L"exportseg", nullptr, L"export",
-                      L"exportsel", L"batch", L"exportopts", nullptr, L"settings"});
+                      L"exportsel", L"exportover", L"batch", L"exportopts", nullptr, L"settings"});
     else if (title == L"Edit" || title == L"Segment")
         BuildMenu(m, {L"undo", L"redo", nullptr, L"setstart", L"setend", L"add", L"split", L"duplicate", L"delete", L"clear", nullptr,
                       L"nudgestartback", L"nudgestartfwd", L"nudgeendback", L"nudgeendfwd", nullptr, L"label", L"editseg", L"toggleseg",
@@ -1323,8 +1355,32 @@ void Editor::ExportSegmentsAs() {
 
 // ------------------------------------------------------------------------------------------------ export & tools
 
-void Editor::Export(bool onlySelected) {
+std::vector<Marker> Editor::MarkersAfterCut(const std::vector<Segment>& list, const std::wstring& cutMode,
+                                            double speed) const {
+    // The pieces follow each other in list order; a keyframe cut starts each one at the keyframe before its start.
+    std::vector<Marker> out;
+    double offset = 0;
+    for (const Segment& g : list) {
+        double start = g.start;
+        if (cutMode == L"keyframe" && !kf_.pts.empty()) {
+            auto it = std::upper_bound(kf_.pts.begin(), kf_.pts.end(), g.start + 0.0005);
+            if (it != kf_.pts.begin()) start = std::min(start, *(it - 1));
+        }
+        for (const Marker& mk : app_->markers_.Items())
+            if (mk.t >= start && mk.t < g.end) out.push_back({(offset + mk.t - start) / speed, mk.label});
+        offset += g.end - start;
+    }
+    std::sort(out.begin(), out.end(), [](const Marker& a, const Marker& b) { return a.t < b.t; });
+    return out;
+}
+
+void Editor::Export(bool onlySelected, bool overwrite) {
     if (!media_ || jobRunning_) return;
+    bool canOverwrite = media_->path.find(L"://") == std::wstring::npos;
+    if (overwrite && !canOverwrite) {
+        SetStatus(L"Only a file on disk can be overwritten.");
+        return;
+    }
     for (const auto& st : media_->streams)
         if (st.keep && st.encrypted) {
             SetStatus(L"This file is DRM-protected (copy-protected tracks), so it can't be cut or exported.", L"", 3);
@@ -1348,11 +1404,27 @@ void Editor::Export(bool onlySelected) {
         list.push_back(whole);
     }
     double speed = 1;
-    if (s_.confirmExport && !util::TestMode()) {
-        if (!dialogs::ExportOptions(app_->hwnd_, s_, (int)list.size(), Ext(media_->path), &speed)) return;
+    if ((s_.confirmExport || overwrite) && !util::TestMode()) {
+        if (!dialogs::ExportOptions(app_->hwnd_, s_, (int)list.size(), Ext(media_->path), &speed,
+                                    canOverwrite ? &overwrite : nullptr))
+            return;
         SaveSettings();
         UpdateChecks();
     }
+    if (overwrite && util::TestMode()) {
+        // A test copy may only replace files inside its own FASTPLAY_EDIT_OUT folder, never the user's media.
+        wchar_t env[MAX_PATH];
+        std::wstring dir = GetEnvironmentVariableW(L"FASTPLAY_EDIT_OUT", env, MAX_PATH) ? util::Lower(util::FullPath(env)) : L"";
+        if (dir.empty() || util::Lower(util::FullPath(media_->path)).rfind(dir + L"\\", 0) != 0) {
+            SetStatus(L"Test mode: overwriting is only allowed inside FASTPLAY_EDIT_OUT.");
+            return;
+        }
+    }
+    if (overwrite && !util::TestMode() &&
+        Box(L"Replace this file with the edited version?\n\n" + media_->path +
+                L"\n\nTHE ORIGINAL CAN'T BE RECOVERED AFTERWARDS.",
+            L"Overwrite the original", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        return;
     std::vector<int> streams;
     for (const auto& st : media_->streams)
         if (st.keep) streams.push_back(st.index);
@@ -1362,20 +1434,32 @@ void Editor::Export(bool onlySelected) {
     }
     double seconds = 0;
     for (const auto& s : list) seconds += s.Duration();
-    OfferFasterDrive(seconds / speed);
+    if (!overwrite) OfferFasterDrive(seconds / speed);
     int sel = (int)SendMessageW(rotationBox_, CB_GETCURSEL, 0, 0);
     int rotation = sel > 0 ? (sel - 1) * 90 : -1;
     auto m = media_;
     KeyframeIndex keyframes = kf_;
     EditSettings settings = JobSettings();
     bool verify = s_.verifyOutputs;
-    RunJob(L"Export", [this, m, keyframes, settings, streams, rotation, speed, list, verify](ProgressFn p, Cancel* ct) mutable {
+    if (overwrite) {
+        // One lossless file in the source's own format: no Discord re-encode, size limit or audio mix, always checked.
+        settings.overwriteSource = true;
+        settings.merge = true;
+        settings.format = L"same";
+        settings.discordReady = false;
+        settings.discordSizeMB = 0;
+        settings.mixAudio = false;
+        settings.copyToClipboard = false;
+        verify = true;
+    }
+    RunJob(overwrite ? L"Overwrite" : L"Export", [this, m, keyframes, settings, streams, rotation, speed, list, verify](ProgressFn p, Cancel* ct) mutable {
         if (keyframes.pts.empty() && m->Video()) {
             p(-1, L"Waiting for the keyframe scan...");
             keyframes = Keyframes(*m, m->Video()->index, ct);
         }
         Exporter ex(*m, settings, streams, rotation, speed, keyframes, p);
         auto outs = ex.Run(list, ct);
+        if (settings.overwriteSource) return ReplaceSource(ex, *m, list, settings, speed, outs, p, ct);
         std::wstring what = outs.size() == 1 ? L"Exported " + util::FileName(outs[0])
                                              : L"Exported " + std::to_wstring(outs.size()) + L" files to " + util::DirName(outs[0]);
         if (ex.Transcoded()) what += L" as H.264 for Discord";
@@ -1391,6 +1475,61 @@ void Editor::Export(bool onlySelected) {
         }
         return std::make_pair(what, outs.empty() ? std::wstring() : outs[0]);
     }, true);
+}
+
+std::pair<std::wstring, std::wstring> Editor::ReplaceSource(Exporter& ex, const MediaInfo& m,
+                                                            const std::vector<Segment>& list,
+                                                            const EditSettings& settings, double speed,
+                                                            const std::vector<std::wstring>& outs, ProgressFn p,
+                                                            Cancel* ct) {
+    if (outs.size() != 1) throw EditError(L"Overwrite expected one output file, got " + std::to_wstring(outs.size()));
+    std::wstring src = m.path, edited = outs[0];
+    // When the original stays, the edited file keeps a plain name next to it instead of the temporary one.
+    auto keepEdited = [&] {
+        std::wstring kept = UniquePath(util::DirName(src) + L"\\" + BaseName(src) + L"-edited" + Ext(edited));
+        return MoveFileExW(edited.c_str(), kept.c_str(), 0) ? kept : edited;
+    };
+    p(-1, L"Checking the edited file...");
+    auto issues = ex.Verify(list, outs, ct);
+    if (!issues.empty()) {
+        ShowIssues(issues);
+        std::wstring kept = keepEdited();
+        return {L"Not overwritten: the check found " + Plural(issues.size(), L"problem", L"problems") +
+                    L". The edited version is " + util::FileName(kept),
+                kept};
+    }
+    p(-1, L"Replacing the original...");
+    // The UI thread notes where the markers land, then closes the file (playback, thumbnails, scanners).
+    auto released = std::make_shared<std::promise<std::vector<Marker>>>();
+    auto ready = released->get_future();
+    Post([this, released, list, cutMode = settings.cutMode, speed] {
+        std::vector<Marker> moved = MarkersAfterCut(list, cutMode, speed);
+        app_->CloseFile();
+        released->set_value(std::move(moved));
+    });
+    if (ready.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
+        std::wstring kept = keepEdited();
+        return {L"Not overwritten (FastPlay didn't close the file). The edited version is " + util::FileName(kept), kept};
+    }
+    std::vector<Marker> moved = ready.get();
+    std::wstring err = SwapInEdited(src, edited);
+    std::wstring kept = err.empty() ? src : keepEdited();
+    Post([this, src, moved, ok = err.empty()] {
+        if (ok) {
+            DeleteFileW(segio::AutosavePath(src).c_str());  // the old cut's segments don't fit the new file
+            MarkerList ml;
+            ml.Load(src);
+            ml.RemoveAll();
+            for (const Marker& mk : moved) {
+                int i = ml.Add(mk.t, 0, nullptr);
+                if (i >= 0 && !mk.label.empty()) ml.Rename(i, mk.label);
+            }
+        }
+        app_->Open(src);
+    });
+    util::TimingLog(("overwrite: " + (err.empty() ? std::string("replaced ") + util::Utf8(src) : util::Utf8(err))).c_str());
+    if (!err.empty()) return {L"Not overwritten: " + err + L". The edited version is " + util::FileName(kept), kept};
+    return {L"Overwrote " + util::FileName(src) + L" with the edited version", src};
 }
 
 void Editor::OfferFasterDrive(double outputSeconds) {

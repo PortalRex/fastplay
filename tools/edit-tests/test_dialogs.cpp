@@ -122,7 +122,8 @@ static bool SaveBmp(HWND h, const std::wstring& path, UINT flags) {
     return saved;
 }
 
-static const wchar_t* kNames[] = {L"segment", L"export", L"settings", L"batch", L"prompt", L"prompt2", L"viewer"};
+static const wchar_t* kNames[] = {L"segment", L"export", L"settings", L"batch", L"prompt", L"prompt2", L"viewer",
+                                  L"overwrite"};
 
 struct Data {
     edit::Segment seg;
@@ -134,7 +135,7 @@ struct Data {
 static void Render(HWND owner, const std::wstring& outDir, int offX) {
     for (int theme = 0; theme < 2; ++theme) {
         dd::g_themeOverride = theme;
-        for (int which = 0; which < 7; ++which) {
+        for (int which = 0; which < 8; ++which) {
             Data d;
             d.seg = {12.5, 74.25, L"Intro", L"scene=1, cam=a", true, 0};
             d.v1 = which == 6 ? L"ffmpeg version 7.1 Copyright (c) 2000-2024 the FFmpeg developers\n"
