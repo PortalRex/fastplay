@@ -36,7 +36,9 @@ public:
 
 private:
     void Run();
-    bool DecodeOne(struct mpv_handle* h, struct mpv_render_context* rc, double t);
+    bool DecodeOne(struct mpv_handle* h, struct mpv_render_context* rc, double t);  // t: a keyframe time (Snap)
+    bool SeekKey(struct mpv_handle* h, double t);
+    double Render(struct mpv_handle* h, struct mpv_render_context* rc, struct Thumb* th);
     int64_t Key(double t) const { return (int64_t)(t * 1000 + 0.5); }
 
     HWND notify_ = nullptr;

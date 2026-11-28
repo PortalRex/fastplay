@@ -148,6 +148,10 @@ void Thumbnailer::Run() {
         {"vd-lavc-skiploopfilter", "all"}, {"vd-lavc-fast", "yes"}, {"video-latency-hacks", "yes"},
         {"sub-auto", "no"}, {"audio-file-auto", "no"}, {"cover-art-auto", "no"}, {"osd-level", "0"},
         {"sws-scaler", "bilinear"}, {"stop-screensaver", "no"}, {"taskbar-progress", "no"},
+        // Same as the player (App::SetMpvOptions): fragment times from the mfra index. Without it this instance
+        // read every fragment header of an OBS recording at open (6.6 s on a 5 GB file on a hard disk), and the
+        // player's own seeks crawled while it did.
+        {"demuxer-lavf-o", "use_mfra_for=pts"},
     };
     for (auto& o : opts) g_mpv.mpv_set_option_string(h, o[0], o[1]);
     mpv_render_context* rc = nullptr;
@@ -161,6 +165,7 @@ void Thumbnailer::Run() {
     g_mpv.mpv_command(h, load);
     // Wait for the file to open (or fail) before taking requests.
     bool loaded = false;
+    DWORD openStart = GetTickCount();
     for (int i = 0; i < 400 && !loaded; i++) {
         {
             std::lock_guard<std::mutex> l(mu_);
@@ -170,6 +175,7 @@ void Thumbnailer::Run() {
         if (e->event_id == MPV_EVENT_FILE_LOADED) loaded = true;
         else if (e->event_id == MPV_EVENT_END_FILE || e->event_id == MPV_EVENT_SHUTDOWN) break;
     }
+    if (loaded) util::TimingLog(("thumbs: file open took " + std::to_string(GetTickCount() - openStart) + " ms").c_str());
 
     while (loaded) {
         double target = -1;
@@ -210,23 +216,29 @@ void Thumbnailer::Run() {
     g_mpv.mpv_terminate_destroy(h);
 }
 
-bool Thumbnailer::DecodeOne(mpv_handle* h, mpv_render_context* rc, double t) {
+// Keyframe seek; waits for it to finish (playback-restart). False on failure or stop.
+bool Thumbnailer::SeekKey(mpv_handle* h, double t) {
     char ts[32];
     snprintf(ts, sizeof ts, "%.3f", t);
     const char* seek[] = {"seek", ts, "absolute+keyframes", nullptr};
+    // Drop events still queued from earlier seeks, so the restart waited for below is this seek's.
+    for (mpv_event* e = g_mpv.mpv_wait_event(h, 0); e->event_id != MPV_EVENT_NONE; e = g_mpv.mpv_wait_event(h, 0))
+        if (e->event_id == MPV_EVENT_SHUTDOWN || e->event_id == MPV_EVENT_END_FILE) return false;
     if (g_mpv.mpv_command(h, seek) < 0) return false;
-    // Wait for the seek to finish (playback-restart), then for the new frame to reach the render context.
-    bool restarted = false;
-    for (int i = 0; i < 60 && !restarted; i++) {
+    for (int i = 0; i < 60; i++) {
         {
             std::lock_guard<std::mutex> l(mu_);
             if (stop_) return false;
         }
         mpv_event* e = g_mpv.mpv_wait_event(h, 0.05);
-        if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) restarted = true;
         if (e->event_id == MPV_EVENT_SHUTDOWN || e->event_id == MPV_EVENT_END_FILE) return false;
+        if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) return true;
     }
-    if (!restarted) return false;
+    return false;
+}
+
+// Draws the frame mpv holds into th (whose w is set); returns its time, -1 on failure.
+double Thumbnailer::Render(mpv_handle* h, mpv_render_context* rc, Thumb* th) {
     for (int i = 0; i < 20; i++) {
         if (g_mpv.mpv_render_context_update(rc) & MPV_RENDER_UPDATE_FRAME) break;
         WaitForSingleObject(frameEvent_, 25);
@@ -234,11 +246,8 @@ bool Thumbnailer::DecodeOne(mpv_handle* h, mpv_render_context* rc, double t) {
     int64_t vw = 0, vh = 0;
     g_mpv.mpv_get_property(h, "dwidth", MPV_FORMAT_INT64, &vw);
     g_mpv.mpv_get_property(h, "dheight", MPV_FORMAT_INT64, &vh);
-    if (vw <= 0 || vh <= 0) return false;
-    auto th = std::make_shared<Thumb>();
-    th->w = thumbW_;
-    th->h = std::max(16, (int)(thumbW_ * vh / vw));
-    th->time = t;
+    if (vw <= 0 || vh <= 0) return -1;
+    th->h = std::max(16, (int)(th->w * vh / vw));
     th->px.resize((size_t)th->w * th->h);
     int size[2] = {th->w, th->h};
     size_t stride = (size_t)th->w * 4;
@@ -249,7 +258,36 @@ bool Thumbnailer::DecodeOne(mpv_handle* h, mpv_render_context* rc, double t) {
         {MPV_RENDER_PARAM_SW_POINTER, th->px.data()},
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
-    if (g_mpv.mpv_render_context_render(rc, rp) < 0) return false;
+    if (g_mpv.mpv_render_context_render(rc, rp) < 0) return -1;
+    double pos = -1;  // only up to date once the frame is drawn (paused, rendered on demand)
+    g_mpv.mpv_get_property(h, "time-pos", MPV_FORMAT_DOUBLE, &pos);
+    return pos;
+}
+
+bool Thumbnailer::DecodeOne(mpv_handle* h, mpv_render_context* rc, double t) {
+    auto th = std::make_shared<Thumb>();
+    th->w = thumbW_;
+    th->time = t;
+    if (!SeekKey(h, t)) return false;
+    double pos = Render(h, rc, th.get());
+    if (pos < 0) return false;
+    // With the mfra index (OBS recordings) a keyframe seek into a part of the file the demuxer hasn't read lands one
+    // fragment early, whatever the offset into the fragment; this instance keeps no back buffer, so asking again
+    // lands there again. Aiming just inside the next keyframe's fragment then lands on the keyframe wanted.
+    if (pos < t - 0.3) {
+        double next = -1;
+        {
+            std::lock_guard<std::mutex> l(mu_);
+            auto it = std::upper_bound(keys_.begin(), keys_.end(), t + 0.001);
+            if (it != keys_.end()) next = *it;
+        }
+        auto again = std::make_shared<Thumb>(*th);
+        double pos2 = next > 0 && SeekKey(h, next + 0.05) ? Render(h, rc, again.get()) : -1;
+        if (pos2 >= 0 && std::fabs(pos2 - t) < std::fabs(pos - t)) {
+            th = again;
+            pos = pos2;
+        }
+    }
 
     std::lock_guard<std::mutex> l(mu_);
     cache_[Key(t)] = {th, ++tick_};

@@ -949,6 +949,8 @@ void App::ApplyAudioMix(bool announce) {
         graph += "amix=inputs=" + std::to_string(ids.size()) + ":duration=first:normalize=0[ao]";
     }
     mpvx::SetStr(mpv_, "lavfi-complex", graph.c_str());
+    // The graph took the audio output over and left no track selected ("auto" doesn't reselect mid-file).
+    if (!want && !ids.empty()) mpvx::SetStr(mpv_, "aid", std::to_string(ids[0]).c_str());
     audioMixed_ = want;
     util::TimingLog(("audio mix: " + (want ? graph : std::string("off"))).c_str());
     if (announce || want)
